@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +30,18 @@ func postJSON(t *testing.T, handler http.Handler, path string, body any) *httpte
 func getJSON(t *testing.T, handler http.Handler, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+// postForm simulates what a plain HTML <form method="POST"> submits from
+// a mobile browser — the tap-to-approve page's actual request shape,
+// distinct from postJSON's scripted-caller shape.
+func postForm(t *testing.T, handler http.Handler, path string, values url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(values.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	return rec
@@ -158,5 +172,119 @@ func TestDecisionHandler_InvalidDecisionValueRejected(t *testing.T) {
 	rec := postJSON(t, decision, "/requests/req-1/decide", map[string]string{"decision": "maybe"})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("got status %d, want 400", rec.Code)
+	}
+}
+
+func TestDecisionHandler_ApprovalPageShowsPromptAndButtons(t *testing.T) {
+	store := relay.NewStore()
+	control := relay.NewControlHandler(store, time.Minute)
+	decision := relay.NewDecisionHandler(store)
+
+	postJSON(t, control, "/requests/req-1", map[string]string{"prompt": "run git push?"})
+
+	rec := getJSON(t, decision, "/requests/req-1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "run git push?") {
+		t.Fatalf("page missing the prompt text: %s", body)
+	}
+	if !strings.Contains(body, `value="approve"`) || !strings.Contains(body, `value="deny"`) {
+		t.Fatalf("page missing approve/deny form controls: %s", body)
+	}
+}
+
+func TestDecisionHandler_ApprovalPageUnknownID(t *testing.T) {
+	store := relay.NewStore()
+	decision := relay.NewDecisionHandler(store)
+
+	rec := getJSON(t, decision, "/requests/nonexistent")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("got status %d, want 404", rec.Code)
+	}
+}
+
+func TestDecisionHandler_ApprovalPageAlreadyDecided(t *testing.T) {
+	store := relay.NewStore()
+	control := relay.NewControlHandler(store, time.Minute)
+	decision := relay.NewDecisionHandler(store)
+
+	postJSON(t, control, "/requests/req-1", map[string]string{"prompt": "prompt"})
+	postJSON(t, decision, "/requests/req-1/decide", map[string]string{"decision": "approve"})
+
+	rec := getJSON(t, decision, "/requests/req-1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, `value="approve"`) {
+		t.Fatalf("an already-decided request must not still show the approve button: %s", body)
+	}
+	if !strings.Contains(body, "approved") {
+		t.Fatalf("page should mention the request is already approved: %s", body)
+	}
+}
+
+func TestDecisionHandler_FormApproveThenReflectedViaControl(t *testing.T) {
+	store := relay.NewStore()
+	control := relay.NewControlHandler(store, time.Minute)
+	decision := relay.NewDecisionHandler(store)
+
+	postJSON(t, control, "/requests/req-1", map[string]string{"prompt": "prompt"})
+
+	rec := postForm(t, decision, "/requests/req-1/decide", url.Values{"decision": {"approve"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Approved") {
+		t.Fatalf("form submission should render a confirmation page, got: %s", rec.Body.String())
+	}
+
+	pollRec := getJSON(t, control, "/requests/req-1")
+	var view map[string]string
+	_ = json.Unmarshal(pollRec.Body.Bytes(), &view)
+	if view["status"] != "approved" {
+		t.Fatalf("got status %q, want approved", view["status"])
+	}
+}
+
+func TestDecisionHandler_FormDenyThenReflectedViaControl(t *testing.T) {
+	store := relay.NewStore()
+	control := relay.NewControlHandler(store, time.Minute)
+	decision := relay.NewDecisionHandler(store)
+
+	postJSON(t, control, "/requests/req-1", map[string]string{"prompt": "prompt"})
+
+	rec := postForm(t, decision, "/requests/req-1/decide", url.Values{"decision": {"deny"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Denied") {
+		t.Fatalf("form submission should render a confirmation page, got: %s", rec.Body.String())
+	}
+
+	pollRec := getJSON(t, control, "/requests/req-1")
+	var view map[string]string
+	_ = json.Unmarshal(pollRec.Body.Bytes(), &view)
+	if view["status"] != "denied" {
+		t.Fatalf("got status %q, want denied", view["status"])
+	}
+}
+
+func TestDecisionHandler_PromptTextIsEscaped(t *testing.T) {
+	store := relay.NewStore()
+	control := relay.NewControlHandler(store, time.Minute)
+	decision := relay.NewDecisionHandler(store)
+
+	postJSON(t, control, "/requests/req-1", map[string]string{"prompt": `<script>alert(1)</script>`})
+
+	rec := getJSON(t, decision, "/requests/req-1")
+	body := rec.Body.String()
+	if strings.Contains(body, "<script>") {
+		t.Fatalf("prompt text must be HTML-escaped, got unescaped script tag: %s", body)
+	}
+	if !strings.Contains(body, "&lt;script&gt;") {
+		t.Fatalf("expected the escaped form of the prompt in the page: %s", body)
 	}
 }

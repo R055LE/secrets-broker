@@ -129,7 +129,11 @@ for that catch and why the fix is a separate device, and
 
 The relay exposes two ports — a **control port** (broker registers/polls) and a **decision port**
 (the approving device submits approve/deny) — specifically so a Tailscale ACL policy can restrict
-each to a different peer, with no application-level auth code at all:
+each to a different peer, with no application-level auth code at all. The decision port serves a
+minimal tap-to-approve HTML page at `GET /requests/<id>` — no app or scripting needed on the
+approving device, just open the link in any mobile browser and tap Approve or Deny. It also
+accepts a plain JSON `POST /requests/<id>/decide` (`{"decision":"approve"|"deny"}`) for scripted
+use, same endpoint either way.
 
 ```
 secrets-broker-relay -control-addr <tailscale-ip>:7620 -decision-addr <tailscale-ip>:7621
