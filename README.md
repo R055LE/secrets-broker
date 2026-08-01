@@ -116,10 +116,15 @@ path = "/run/secrets/bws-token"   # must be mode 0600 or tighter
 
 **This only solves half of headless deployment.** `KDialogApprover` still needs a live desktop
 session to render into — `approval = "prompt"` or `"always"` on a truly headless box will hang or
-fail outright. Until a remote-capable `Approver` exists (webhook, chat bot — a real design problem
-in its own right, since it needs its own authentication story, not just a network call), headless
-deployments need `approval = "never"` with a deliberately tight allowlist. See
-[ADR-0007](decisions/0007-headless-env-and-file-resolvers.md).
+fail outright. Until then, headless deployments need `approval = "never"` with a deliberately
+tight allowlist. See [ADR-0007](decisions/0007-headless-env-and-file-resolvers.md).
+
+A remote `Approver` is designed but not yet built: a Tailscale-reachable relay running on a
+*separate* always-on device, never the broker's own host — binding the broker's own machine to a
+tailscale IP looked sufficient at first but isn't, since a co-located process (the invoking agent)
+could reach that address directly without ever crossing the tailnet. See
+[ADR-0008](decisions/0008-tailscale-relay-approver-design.md) for the full reasoning, including
+that catch.
 
 ## Project structure
 
@@ -149,6 +154,7 @@ decisions/              ADRs — read before changing anything security-relevant
 | Exact-argv allowlist matching, no globs | A prefix match would let `["terraform","apply"]` also satisfy `terraform apply -destroy`. [ADR-0005](decisions/0005-exact-argv-allowlist-matching-no-globs.md) |
 | Secret Service (`secret-tool`) over the native `kwallet-query` CLI | `kwallet-query -w` reports success while silently failing to persist, verified against the wallet file and D-Bus directly. [ADR-0006](decisions/0006-secret-service-over-kwallet-query-cli.md) |
 | `env`/`file` Resolver backends for headless deployment | Secret Service resolution kept working all weekend without a human present — it was the desktop-only `Approver` that actually failed. The `Resolver` half of headless deployment was the tractable piece to fix first. [ADR-0007](decisions/0007-headless-env-and-file-resolvers.md) |
+| Remote `Approver` design: relay on a separate device, not the broker's own host | A same-host listener bound to the tailscale interface doesn't stop the invoking agent from reaching it directly — that traffic never has to cross the tailnet at all. [ADR-0008](decisions/0008-tailscale-relay-approver-design.md) |
 | No `--yes`/`--force` flag on `run`, ever | The agent is exactly the untrusted party the approval gate exists for. A bypass flag would make it theater. |
 
 ## Related projects

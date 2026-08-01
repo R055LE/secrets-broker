@@ -76,5 +76,9 @@ task build              # Build binary to bin/secrets-broker
   that requirement for token resolution specifically, but **there is no headless `Approver` yet** —
   a deployment with `approval` set to anything but `"never"` on a box with no desktop session will
   hang or fail. Don't treat the Resolver split as having solved headless deployment in general;
-  it solved half of it.
+  it solved half of it. **If implementing the remote `Approver`: it must not listen on the
+  broker's own host.** A same-host listener bound to the tailscale interface doesn't stop the
+  invoking agent from reaching it directly by shell — that traffic never crosses the tailnet, so
+  binding to a tailscale IP alone grants no protection against the one caller this gate exists to
+  stop. The decision-granting endpoint belongs on a separate always-on device (see ADR-0008).
 - Exact argv matching only in `internal/policy` — no globs, no shell-string parsing (ADR-0005).
