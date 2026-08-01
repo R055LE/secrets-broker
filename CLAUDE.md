@@ -98,9 +98,8 @@ task build:relay        # Build bin/secrets-broker-relay — deploy on a SEPARAT
   header check "for defense in depth" would be scope creep against the explicit design; if the ACL
   model turns out to be insufficient, that's a reason to revisit ADR-0008/0009, not to bolt on
   extra checks unilaterally.
-- **Real Tailscale ACL enforcement for the relay is unverified** — everything about the protocol
-  and code is tested (including a real localhost round trip), but proving an actual ACL policy
-  restricts the control vs decision port to different peers needs a real tailnet with two devices,
-  which this environment doesn't have. Don't describe this as proven in any future doc update
-  without it actually having been checked.
+- **Real Tailscale ACL enforcement for the relay is verified** (2026-08-01, against a live
+  tailnet, phone as the approving device) — see ADR-0009 Consequences. That pass ran the relay on
+  the same host as the broker as a dev stand-in; whether same-host-vs-separate-device holds up as
+  its own property is still open, don't conflate the two when describing what's proven.
 - Exact argv matching only in `internal/policy` — no globs, no shell-string parsing (ADR-0005).

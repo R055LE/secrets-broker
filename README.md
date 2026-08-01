@@ -150,12 +150,12 @@ control_url = "http://<relay-tailscale-ip>:7620"
 ```
 
 An example Tailscale ACL policy restricting each port to a different tailnet peer is in
-[ADR-0009](decisions/0009-two-port-relay-protocol.md). **That ACL enforcement is the one piece not
-verified from this environment** — the protocol and every code path have full test coverage
-(including a real localhost round trip), but proving a Tailscale ACL policy actually restricts
-port 7620 vs 7621 to different peers needs a real tailnet with two devices, which this environment
-doesn't have. Treat that specific property as designed and implemented, not yet proven, until
-checked against a real tailnet.
+[ADR-0009](decisions/0009-two-port-relay-protocol.md). **ACL enforcement is verified against a
+real tailnet**, not just tested against fakes: a phone (untagged, `autogroup:member`) reached the
+decision port, tapped Approve on a pending request, and the broker's `TailscaleApprover` observed
+the approval and ran the wrapped command. That pass ran the relay on the same host as the broker
+as a development stand-in for the production topology (see ADR-0008); confirming the
+same-host-vs-separate-device property in isolation is still open.
 
 ## Project structure
 

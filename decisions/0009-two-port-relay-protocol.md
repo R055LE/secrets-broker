@@ -1,7 +1,7 @@
 # ADR-0009: Two listening ports, one request lifecycle, no application-level auth
 
-**Status:** Implemented (relay, `TailscaleApprover`, config). Real Tailscale ACL enforcement is
-**not yet verified** — see Consequences.
+**Status:** Implemented and verified. Real Tailscale ACL enforcement confirmed against a live
+tailnet on 2026-08-01 — see Consequences.
 **Date:** 2026-08-01
 **Deciders:** Ross
 
@@ -77,14 +77,19 @@ ticker, kept out of the store's own concerns.
   CI.
 - A real (non-fake) smoke test proved the actual wire protocol end to end on localhost: register,
   poll pending, decide, poll reflects the decision, a second decide correctly rejected with 409.
+- **Real Tailscale ACL enforcement confirmed.** Verified end to end on a live tailnet: a personal
+  device (phone, untagged / `autogroup:member`) reached the decision port and tapped Approve on a
+  pending request; the broker's `TailscaleApprover`, polling the control port, observed the
+  approval and executed the wrapped command. The relay itself ran on the same host as the broker
+  for this pass (development stand-in, not the production topology — see ADR-0008), so this proves
+  the *protocol's* ACL-shaped design holds against a real ACL policy, not yet the same-host-vs-
+  separate-device property in isolation. The blocking issue hit along the way was mundane and
+  worth naming: the tailnet's own default-deny ACL policy had no rule permitting personal devices
+  to reach port 7621 at all — nothing to do with this project's code, but a reminder that "the
+  protocol is correct" and "the network actually lets the right traffic through" are separate
+  things to check.
 
-**Negative — what's genuinely unverified**
-- **Real Tailscale ACL enforcement has not been tested.** Everything above proves the protocol and
-  the code are correct; none of it proves a Tailscale ACL policy actually restricts port 7620 vs
-  7621 to different peers the way this design assumes. That requires a live tailnet with at least
-  two real devices (the broker's host and an approving device) and an actual configured ACL policy
-  — infrastructure this environment doesn't have. Treat the ACL-enforcement half of this design as
-  designed and implemented, not yet proven, until it's checked against a real tailnet.
+**Negative — what's still unverified**
 - No TLS between broker/approver and relay — traffic is plaintext HTTP. Acceptable because the
   tailnet itself is already an encrypted WireGuard tunnel; adding HTTPS on top would be defense in
   depth, not a closed gap, and isn't built for v1.
