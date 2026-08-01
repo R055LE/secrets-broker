@@ -288,3 +288,84 @@ func TestDecisionHandler_PromptTextIsEscaped(t *testing.T) {
 		t.Fatalf("expected the escaped form of the prompt in the page: %s", body)
 	}
 }
+
+func TestDecisionHandler_CrossOriginFormRejected(t *testing.T) {
+	store := relay.NewStore()
+	control := relay.NewControlHandler(store, time.Minute)
+	decision := relay.NewDecisionHandler(store)
+
+	postJSON(t, control, "/requests/req-1", map[string]string{"prompt": "prompt"})
+
+	req := httptest.NewRequest(http.MethodPost, "/requests/req-1/decide", strings.NewReader("decision=approve"))
+	req.Host = "relay.example"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://attacker.example")
+	rec := httptest.NewRecorder()
+	decision.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("got status %d, want 403 for a cross-origin form POST", rec.Code)
+	}
+
+	// Confirm the decision genuinely didn't take effect.
+	pollRec := getJSON(t, control, "/requests/req-1")
+	var view map[string]string
+	_ = json.Unmarshal(pollRec.Body.Bytes(), &view)
+	if view["status"] != "pending" {
+		t.Fatalf("got status %q, want pending — the rejected cross-origin request must not have decided anything", view["status"])
+	}
+}
+
+func TestDecisionHandler_SameOriginFormAccepted(t *testing.T) {
+	store := relay.NewStore()
+	control := relay.NewControlHandler(store, time.Minute)
+	decision := relay.NewDecisionHandler(store)
+
+	postJSON(t, control, "/requests/req-1", map[string]string{"prompt": "prompt"})
+
+	req := httptest.NewRequest(http.MethodPost, "/requests/req-1/decide", strings.NewReader("decision=approve"))
+	req.Host = "relay.example"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://relay.example")
+	rec := httptest.NewRecorder()
+	decision.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200 for a same-origin form POST: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDecisionHandler_MismatchedRefererRejected(t *testing.T) {
+	store := relay.NewStore()
+	control := relay.NewControlHandler(store, time.Minute)
+	decision := relay.NewDecisionHandler(store)
+
+	postJSON(t, control, "/requests/req-1", map[string]string{"prompt": "prompt"})
+
+	req := httptest.NewRequest(http.MethodPost, "/requests/req-1/decide", strings.NewReader("decision=approve"))
+	req.Host = "relay.example"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Referer", "https://attacker.example/evil-page")
+	rec := httptest.NewRecorder()
+	decision.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("got status %d, want 403 for a mismatched Referer", rec.Code)
+	}
+}
+
+func TestDecisionHandler_NoOriginOrRefererAllowed(t *testing.T) {
+	// The documented scripted/JSON API path — no browser, no Origin/Referer
+	// at all. Must not be broken by the CSRF defense, which only targets
+	// browser-driven requests.
+	store := relay.NewStore()
+	control := relay.NewControlHandler(store, time.Minute)
+	decision := relay.NewDecisionHandler(store)
+
+	postJSON(t, control, "/requests/req-1", map[string]string{"prompt": "prompt"})
+
+	rec := postJSON(t, decision, "/requests/req-1/decide", map[string]string{"decision": "approve"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200 for a header-less scripted call: %s", rec.Code, rec.Body.String())
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -96,6 +97,11 @@ func NewDecisionHandler(store *Store) http.Handler {
 	})
 
 	mux.HandleFunc("POST /requests/{id}/decide", func(w http.ResponseWriter, r *http.Request) {
+		if !sameOrigin(r) {
+			http.Error(w, "cross-origin request rejected", http.StatusForbidden)
+			return
+		}
+
 		id := r.PathValue("id")
 
 		decision, err := readDecision(r)
@@ -156,6 +162,38 @@ func readDecision(r *http.Request) (string, error) {
 
 func isBrowserForm(r *http.Request) bool {
 	return strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded")
+}
+
+// sameOrigin defends the decide endpoint against CSRF: a malicious page
+// that somehow learned a pending request's ID (the ID itself is a
+// high-entropy capability token, not guessable — but relying on that
+// implicitly instead of defending explicitly is exactly the kind of gap
+// this project has caught elsewhere) could otherwise auto-submit a hidden
+// form to this endpoint from any origin, since plain HTML form POSTs
+// aren't blocked cross-origin by the browser the way fetch/XHR responses
+// are. Checking Origin (falling back to Referer) against the host the
+// client actually dialed is OWASP's standard "verify origin with
+// standard headers" defense — appropriate here since there's no
+// cookie/session state to pair a CSRF token against.
+//
+// A request with neither header — the documented JSON API, called by a
+// script rather than a browser — is allowed through. CSRF is a
+// browser-specific attack; rejecting headerless scripted callers would
+// break that API for no security benefit.
+func sameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		origin = r.Header.Get("Referer")
+	}
+	if origin == "" {
+		return true
+	}
+
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return u.Host == r.Host
 }
 
 // writeApprovalPage renders the tap-to-approve page. Deliberately no CSS
