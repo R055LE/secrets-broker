@@ -1,0 +1,20 @@
+# Copy to $XDG_CONFIG_HOME/secrets-broker/policy.toml (default
+# ~/.config/secrets-broker/policy.toml) and fill in bws_project_id.
+
+[token_source]
+backend = "secret-service"
+
+[[projects]]
+alias          = "claude-code"
+bws_project_id = "PASTE-YOUR-BWS-SECRETS-MANAGER-PROJECT-UUID-HERE"
+# token_entry is looked up via `secret-tool lookup service secrets-broker entry <token_entry>`
+token_entry    = "claude-code-agent"
+approval       = "prompt"   # "always" | "prompt" | "never" — omit to default to "never"
+
+  [[projects.allow]]
+  argv = ["printenv", "TEST_SECRET_NAME"]
+
+  # Add more allowlisted commands here, one [[projects.allow]] block per
+  # command, e.g.:
+  # [[projects.allow]]
+  # argv = ["git", "push"]

@@ -1,0 +1,12 @@
+[token_source]
+backend = "secret-service"
+
+[[projects]]
+alias          = "dup"
+bws_project_id = "00000000-0000-0000-0000-000000000000"
+token_entry    = "entry-a"
+
+[[projects]]
+alias          = "dup"
+bws_project_id = "11111111-1111-1111-1111-111111111111"
+token_entry    = "entry-b"
