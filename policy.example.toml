@@ -2,7 +2,20 @@
 # ~/.config/secrets-broker/policy.toml) and fill in bws_project_id.
 
 [token_source]
-backend = "secret-service"
+backend = "secret-service"   # "secret-service" | "env" | "file"
+
+# Only needed when backend = "secret-service" (no config needed for "env" or "file").
+
+# Uncomment for backend = "env" — a single env var, injected by whatever starts the
+# process (systemd unit, container). Single-tenant: one broker process, one token.
+# [token_source.env]
+# var = "SECRETS_BROKER_BOOTSTRAP_TOKEN"
+
+# Uncomment for backend = "file" — a single file path (Docker-secrets/Kubernetes-
+# Secret-volume convention, usually tmpfs-backed). Must be mode 0600 or tighter —
+# resolution is refused if the file is readable or writable by group or other.
+# [token_source.file]
+# path = "/run/secrets/bws-token"
 
 [[projects]]
 alias          = "claude-code"

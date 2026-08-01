@@ -83,9 +83,17 @@ func newRunCmd(exitCode *int) *cobra.Command {
 			}
 
 			execRunner := execx.OSRunner{}
+
+			resolver, err := newResolver(cfg.TokenSource, execRunner)
+			if err != nil {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "secrets-broker: %v\n", err)
+				*exitCode = exitDenied
+				return nil
+			}
+
 			b := broker.New(
 				cfg,
-				token.NewSecretServiceResolver(execRunner),
+				resolver,
 				approval.NewKDialogApprover(execRunner),
 				runner.NewBWSRunner(execRunner),
 				logger,
@@ -129,6 +137,24 @@ func newRunCmd(exitCode *int) *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "resolve the policy decision without touching Secret Service, bws, or the audit log")
 
 	return cmd
+}
+
+// newResolver picks the Resolver implementation matching the configured
+// token_source.backend. config.Load already validates that Backend is one
+// of the known values before this is ever called; the default case is a
+// defensive fallback for callers that construct a Config directly without
+// going through Load (broker_test.go does exactly that).
+func newResolver(ts config.TokenSource, execRunner execx.Runner) (token.Resolver, error) {
+	switch ts.Backend {
+	case config.BackendSecretService:
+		return token.NewSecretServiceResolver(execRunner), nil
+	case config.BackendEnv:
+		return token.NewEnvResolver(ts.Env.Var), nil
+	case config.BackendFile:
+		return token.NewFileResolver(ts.File.Path), nil
+	default:
+		return nil, fmt.Errorf("unsupported token_source.backend %q", ts.Backend)
+	}
 }
 
 func verdictLabel(v broker.Verdict) string {

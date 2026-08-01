@@ -32,7 +32,8 @@ just the result.
 - Secret *values* never pass through the broker's own process — `bws run` injects directly into
   the wrapped command's environment.
 - The bootstrap access token never touches the agent's environment, and never sits in a plaintext
-  dotfile — it's resolved from the OS keyring (Secret Service) on demand, per invocation.
+  dotfile — it's resolved on demand, per invocation, from the OS keyring (Secret Service), an env
+  var, or a permission-checked file, depending on deployment target.
 - Exact-argv allowlisting with no shell-string parsing — nothing to quote-escape, nothing
   ambiguous about what's allowed.
 - A human desktop prompt (`kdialog`) gates anything not pre-approved. There is no bypass flag, on
@@ -89,6 +90,37 @@ Service, without invoking `bws`, and without writing an audit record:
 ./bin/secrets-broker run --project claude-code --dry-run -- git push
 ```
 
+## Headless deployment
+
+The desktop-only setup above uses `backend = "secret-service"`. For a systemd unit or container
+with no desktop session, no D-Bus session bus, and nothing to render `kdialog` into, two other
+`token_source.backend` values exist:
+
+```toml
+[token_source]
+backend = "env"
+
+[token_source.env]
+var = "SECRETS_BROKER_BOOTSTRAP_TOKEN"
+```
+
+or
+
+```toml
+[token_source]
+backend = "file"
+
+[token_source.file]
+path = "/run/secrets/bws-token"   # must be mode 0600 or tighter
+```
+
+**This only solves half of headless deployment.** `KDialogApprover` still needs a live desktop
+session to render into — `approval = "prompt"` or `"always"` on a truly headless box will hang or
+fail outright. Until a remote-capable `Approver` exists (webhook, chat bot — a real design problem
+in its own right, since it needs its own authentication story, not just a network call), headless
+deployments need `approval = "never"` with a deliberately tight allowlist. See
+[ADR-0007](decisions/0007-headless-env-and-file-resolvers.md).
+
 ## Project structure
 
 ```
@@ -96,7 +128,7 @@ cmd/secrets-broker/    Composition root — wires real adapters together
 internal/
   cli/                 cobra plumbing only, no policy logic
   broker/               The orchestrator — the whole deny-by-default matrix lives here
-  token/                Resolver interface + SecretServiceResolver
+  token/                Resolver interface + SecretServiceResolver, EnvResolver, FileResolver
   approval/             Approver interface + KDialogApprover
   runner/               Runner interface + BWSRunner (shells out to `bws run`)
   audit/                 Logger interface + JSONLLogger
@@ -116,6 +148,7 @@ decisions/              ADRs — read before changing anything security-relevant
 | `bws run` with explicit argv quoting and env construction | `bws` joins its command tokens and reparses them through a shell, and `--no-inherit-env` drops `HOME` with no way back — verified against `bws`'s own source before writing the adapter. [ADR-0004](decisions/0004-bws-run-for-injection-over-manual-export.md) |
 | Exact-argv allowlist matching, no globs | A prefix match would let `["terraform","apply"]` also satisfy `terraform apply -destroy`. [ADR-0005](decisions/0005-exact-argv-allowlist-matching-no-globs.md) |
 | Secret Service (`secret-tool`) over the native `kwallet-query` CLI | `kwallet-query -w` reports success while silently failing to persist, verified against the wallet file and D-Bus directly. [ADR-0006](decisions/0006-secret-service-over-kwallet-query-cli.md) |
+| `env`/`file` Resolver backends for headless deployment | Secret Service resolution kept working all weekend without a human present — it was the desktop-only `Approver` that actually failed. The `Resolver` half of headless deployment was the tractable piece to fix first. [ADR-0007](decisions/0007-headless-env-and-file-resolvers.md) |
 | No `--yes`/`--force` flag on `run`, ever | The agent is exactly the untrusted party the approval gate exists for. A bypass flag would make it theater. |
 
 ## Related projects

@@ -20,12 +20,22 @@ const (
 	ApprovalNever  = "never"
 )
 
-// BackendSecretService is the only token_source.backend value v1 supports —
-// the freedesktop Secret Service API (via `secret-tool`), which KWallet
-// implements on this machine but which GNOME Keyring implements too. A
-// container/headless backend is a Phase 2 addition to this constant list,
-// not a schema change.
-const BackendSecretService = "secret-service"
+// Supported token_source.backend values.
+//   - BackendSecretService: the freedesktop Secret Service API (via
+//     `secret-tool`), for an interactive desktop session (KWallet or GNOME
+//     Keyring). Needs no backend-specific config.
+//   - BackendEnv: a single environment variable, for a headless deployment
+//     where the token is injected at process start (systemd, container).
+//   - BackendFile: a single file path, for the Docker-secrets/Kubernetes-
+//     Secret-volume convention.
+//
+// A remote-approval Approver counterpart for headless deployments is
+// deliberately not built alongside these — see decisions/0007.
+const (
+	BackendSecretService = "secret-service"
+	BackendEnv           = "env"
+	BackendFile          = "file"
+)
 
 type Config struct {
 	TokenSource TokenSource `toml:"token_source"`
@@ -33,7 +43,17 @@ type Config struct {
 }
 
 type TokenSource struct {
-	Backend string `toml:"backend"`
+	Backend string     `toml:"backend"`
+	Env     EnvSource  `toml:"env"`
+	File    FileSource `toml:"file"`
+}
+
+type EnvSource struct {
+	Var string `toml:"var"`
+}
+
+type FileSource struct {
+	Path string `toml:"path"`
 }
 
 type Project struct {
@@ -89,8 +109,19 @@ func (c *Config) applyDefaults() {
 }
 
 func (c *Config) validate() error {
-	if c.TokenSource.Backend != BackendSecretService {
-		return fmt.Errorf("token_source.backend %q is not supported (only %q in this version)", c.TokenSource.Backend, BackendSecretService)
+	switch c.TokenSource.Backend {
+	case BackendSecretService:
+		// no backend-specific config required
+	case BackendEnv:
+		if c.TokenSource.Env.Var == "" {
+			return errors.New(`token_source.env.var is required when backend is "env"`)
+		}
+	case BackendFile:
+		if c.TokenSource.File.Path == "" {
+			return errors.New(`token_source.file.path is required when backend is "file"`)
+		}
+	default:
+		return fmt.Errorf("token_source.backend %q is not supported (must be one of %q, %q, %q)", c.TokenSource.Backend, BackendSecretService, BackendEnv, BackendFile)
 	}
 
 	if len(c.Projects) == 0 {

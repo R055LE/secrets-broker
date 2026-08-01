@@ -23,8 +23,10 @@ agent the token directly.
   `internal/broker`.
 - `internal/broker/` — The orchestrator. `broker.go` contains the entire deny-by-default decision
   matrix and depends only on the four domain interfaces below, never on a concrete adapter.
-- `internal/token/` — `Resolver` interface + `SecretServiceResolver` (v1's only implementation,
-  shells out to `secret-tool` — not `kwallet-query`, whose write path is broken; see ADR-0006).
+- `internal/token/` — `Resolver` interface + three implementations: `SecretServiceResolver`
+  (desktop, shells out to `secret-tool` — not `kwallet-query`, whose write path is broken; see
+  ADR-0006), `EnvResolver` and `FileResolver` (headless; see ADR-0007). The composition root
+  (`internal/cli/run.go`'s `newResolver`) picks one based on `config.TokenSource.Backend`.
 - `internal/approval/` — `Approver` interface + `KDialogApprover` (v1's only implementation).
 - `internal/runner/` — `Runner` interface + `BWSRunner`, which shells out to `bws run`.
 - `internal/audit/` — `Logger` interface + `JSONLLogger`, append-only, write-before-exec/
@@ -69,7 +71,10 @@ task build              # Build binary to bin/secrets-broker
   resolution failing, or `bws` failing to start are all hard denials — never treated as implicit
   approval and never falling back to an alternate credential source. Full matrix in
   `internal/broker/broker.go` and README.
-- v1's `SecretServiceResolver`/`KDialogApprover` require an active desktop session with a Secret
-  Service provider (KWallet or GNOME Keyring) — a real, documented limitation of the current
-  implementation, not an assumption baked into the architecture (ADR-0003).
+- `KDialogApprover` requires an active desktop session — a real, documented limitation, not an
+  assumption baked into the architecture (ADR-0003). `EnvResolver`/`FileResolver` (ADR-0007) remove
+  that requirement for token resolution specifically, but **there is no headless `Approver` yet** —
+  a deployment with `approval` set to anything but `"never"` on a box with no desktop session will
+  hang or fail. Don't treat the Resolver split as having solved headless deployment in general;
+  it solved half of it.
 - Exact argv matching only in `internal/policy` — no globs, no shell-string parsing (ADR-0005).

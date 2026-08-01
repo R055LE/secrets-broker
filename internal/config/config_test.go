@@ -60,6 +60,53 @@ func TestLoad_BadApprovalValueRejected(t *testing.T) {
 	}
 }
 
+func TestLoad_EnvBackendValid(t *testing.T) {
+	cfg, err := config.Load("testdata/env_backend.toml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.TokenSource.Backend != config.BackendEnv {
+		t.Fatalf("got backend %q, want %q", cfg.TokenSource.Backend, config.BackendEnv)
+	}
+	if cfg.TokenSource.Env.Var != "SECRETS_BROKER_BOOTSTRAP_TOKEN" {
+		t.Fatalf("got env var %q", cfg.TokenSource.Env.Var)
+	}
+}
+
+func TestLoad_EnvBackendMissingVarRejected(t *testing.T) {
+	_, err := config.Load("testdata/env_backend_missing_var.toml")
+	if err == nil {
+		t.Fatal("expected an error when backend=env and env.var is unset")
+	}
+}
+
+func TestLoad_FileBackendValid(t *testing.T) {
+	cfg, err := config.Load("testdata/file_backend.toml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.TokenSource.Backend != config.BackendFile {
+		t.Fatalf("got backend %q, want %q", cfg.TokenSource.Backend, config.BackendFile)
+	}
+	if cfg.TokenSource.File.Path != "/run/secrets/bws-token" {
+		t.Fatalf("got file path %q", cfg.TokenSource.File.Path)
+	}
+}
+
+func TestLoad_FileBackendMissingPathRejected(t *testing.T) {
+	_, err := config.Load("testdata/file_backend_missing_path.toml")
+	if err == nil {
+		t.Fatal("expected an error when backend=file and file.path is unset")
+	}
+}
+
+func TestLoad_UnknownBackendRejected(t *testing.T) {
+	_, err := config.Load("testdata/unknown_backend.toml")
+	if err == nil {
+		t.Fatal("expected an error for an unsupported token_source.backend")
+	}
+}
+
 func TestProject_UnknownAlias(t *testing.T) {
 	cfg, err := config.Load("testdata/valid.toml")
 	if err != nil {
