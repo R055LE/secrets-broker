@@ -1,7 +1,7 @@
 # ADR-0008: A separate relay device for the headless `Approver`, not a same-host listener
 
 **Status:** Accepted (design) — not yet implemented.
-**Date:** 2026-08-02
+**Date:** 2026-08-01
 **Deciders:** Ross
 
 ## Context
