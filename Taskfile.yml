@@ -19,6 +19,11 @@ tasks:
     cmds:
       - go build -ldflags="-s -w -X github.com/R055LE/secrets-broker/internal/cli.Version={{.VERSION}}" -o bin/secrets-broker ./cmd/secrets-broker
 
+  build:relay:
+    desc: Build the secrets-broker-relay binary (deploy this on a SEPARATE device — see decisions/0008)
+    cmds:
+      - go build -ldflags="-s -w" -o bin/secrets-broker-relay ./cmd/secrets-broker-relay
+
   test:
     desc: Run the hermetic unit test suite (no KWallet/kdialog/bws required)
     cmds:

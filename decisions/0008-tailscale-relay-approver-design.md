@@ -1,6 +1,8 @@
 # ADR-0008: A separate relay device for the headless `Approver`, not a same-host listener
 
-**Status:** Accepted (design) — not yet implemented.
+**Status:** Implemented — see [ADR-0009](0009-two-port-relay-protocol.md) for the concrete
+protocol (the two-port split, the request lifecycle) and for what's proven versus what still
+needs a real Tailscale ACL policy to verify.
 **Date:** 2026-08-01
 **Deciders:** Ross
 
@@ -89,8 +91,8 @@ even at the cost of one more small service to run.
   enforcement as remote-peer traffic was never verified — the relay-device design was chosen
   specifically to make that question moot rather than to answer it. If it's ever revisited, verify
   before trusting, per the project's own established pattern (ADR-0004, ADR-0006).
-- Not yet implemented. This ADR records the design and the reasoning that shaped it; the relay
-  service, the broker-side client, and `TailscaleApprover` itself remain to be built.
+- Implemented same-day (ADR-0009). The reasoning here still stands as the record of *why*; the
+  concrete protocol lives in ADR-0009, not restated here.
 
 ## A note on scope, recorded rather than acted on
 

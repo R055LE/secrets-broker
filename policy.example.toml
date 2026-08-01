@@ -17,6 +17,19 @@ backend = "secret-service"   # "secret-service" | "env" | "file"
 # [token_source.file]
 # path = "/run/secrets/bws-token"
 
+# approval_source defaults to backend = "kdialog" (a live desktop session, kdialog --yesno)
+# if this whole section is omitted. Uncomment for a headless deployment using
+# secrets-broker-relay instead — see README's "Remote approval" section and
+# decisions/0008 and decisions/0009 before using this; control_url MUST be the
+# relay's tailscale IP, and the relay MUST run on a separate device from this broker.
+# [approval_source]
+# backend = "tailscale-relay"
+#
+# [approval_source.tailscale_relay]
+# control_url = "http://PASTE-RELAY-TAILSCALE-IP-HERE:7620"
+# poll_interval_seconds = 2    # omit for the default (2)
+# timeout_seconds = 300        # omit for the default (300 = 5 minutes)
+
 [[projects]]
 alias          = "claude-code"
 bws_project_id = "PASTE-YOUR-BWS-SECRETS-MANAGER-PROJECT-UUID-HERE"

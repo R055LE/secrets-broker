@@ -46,12 +46,14 @@ jobs:
           go-version: '1.26.2'
 
       - name: Build
-        run: go build -ldflags="-s -w" -o bin/secrets-broker ./cmd/secrets-broker
+        run: |
+          go build -ldflags="-s -w" -o bin/secrets-broker ./cmd/secrets-broker
+          go build -ldflags="-s -w" -o bin/secrets-broker-relay ./cmd/secrets-broker-relay
 
       - uses: actions/upload-artifact@v4
         with:
           name: secrets-broker-linux-amd64
-          path: bin/secrets-broker
+          path: bin/
 
   release:
     needs: build
@@ -77,8 +79,10 @@ jobs:
           for arch in amd64 arm64; do
             GOOS=linux GOARCH=$arch go build -ldflags="-s -w -X github.com/R055LE/secrets-broker/internal/cli.Version=$VERSION" \
               -o dist/secrets-broker-linux-$arch ./cmd/secrets-broker
+            GOOS=linux GOARCH=$arch go build -ldflags="-s -w" \
+              -o dist/secrets-broker-relay-linux-$arch ./cmd/secrets-broker-relay
           done
-          (cd dist && sha256sum secrets-broker-linux-* > checksums.txt)
+          (cd dist && sha256sum secrets-broker-linux-* secrets-broker-relay-linux-* > checksums.txt)
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2

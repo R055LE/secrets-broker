@@ -107,6 +107,50 @@ func TestLoad_UnknownBackendRejected(t *testing.T) {
 	}
 }
 
+func TestLoad_ApprovalSourceDefaultsToKDialog(t *testing.T) {
+	cfg, err := config.Load("testdata/approval_kdialog_default.toml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ApprovalSource.Backend != config.ApprovalBackendKDialog {
+		t.Fatalf("got approval_source.backend %q, want default %q", cfg.ApprovalSource.Backend, config.ApprovalBackendKDialog)
+	}
+}
+
+func TestLoad_ApprovalTailscaleRelayValid(t *testing.T) {
+	cfg, err := config.Load("testdata/approval_tailscale_relay.toml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ApprovalSource.Backend != config.ApprovalBackendTailscaleRelay {
+		t.Fatalf("got backend %q, want %q", cfg.ApprovalSource.Backend, config.ApprovalBackendTailscaleRelay)
+	}
+	if cfg.ApprovalSource.TailscaleRelay.ControlURL != "http://100.64.0.1:7620" {
+		t.Fatalf("got control_url %q", cfg.ApprovalSource.TailscaleRelay.ControlURL)
+	}
+	// Poll interval / timeout omitted in the fixture — must get defaults.
+	if cfg.ApprovalSource.TailscaleRelay.PollIntervalSeconds != 2 {
+		t.Fatalf("got poll interval %d, want default 2", cfg.ApprovalSource.TailscaleRelay.PollIntervalSeconds)
+	}
+	if cfg.ApprovalSource.TailscaleRelay.TimeoutSeconds != 300 {
+		t.Fatalf("got timeout %d, want default 300", cfg.ApprovalSource.TailscaleRelay.TimeoutSeconds)
+	}
+}
+
+func TestLoad_ApprovalTailscaleRelayMissingURLRejected(t *testing.T) {
+	_, err := config.Load("testdata/approval_tailscale_relay_missing_url.toml")
+	if err == nil {
+		t.Fatal("expected an error when backend=tailscale-relay and control_url is unset")
+	}
+}
+
+func TestLoad_ApprovalUnknownBackendRejected(t *testing.T) {
+	_, err := config.Load("testdata/approval_unknown_backend.toml")
+	if err == nil {
+		t.Fatal("expected an error for an unsupported approval_source.backend")
+	}
+}
+
 func TestProject_UnknownAlias(t *testing.T) {
 	cfg, err := config.Load("testdata/valid.toml")
 	if err != nil {

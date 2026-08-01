@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -91,10 +92,17 @@ func newRunCmd(exitCode *int) *cobra.Command {
 				return nil
 			}
 
+			approver, err := newApprover(cfg.ApprovalSource, execRunner)
+			if err != nil {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "secrets-broker: %v\n", err)
+				*exitCode = exitDenied
+				return nil
+			}
+
 			b := broker.New(
 				cfg,
 				resolver,
-				approval.NewKDialogApprover(execRunner),
+				approver,
 				runner.NewBWSRunner(execRunner),
 				logger,
 			)
@@ -154,6 +162,25 @@ func newResolver(ts config.TokenSource, execRunner execx.Runner) (token.Resolver
 		return token.NewFileResolver(ts.File.Path), nil
 	default:
 		return nil, fmt.Errorf("unsupported token_source.backend %q", ts.Backend)
+	}
+}
+
+// newApprover picks the Approver implementation matching the configured
+// approval_source.backend. Same defensive-default rationale as
+// newResolver above.
+func newApprover(as config.ApprovalSource, execRunner execx.Runner) (approval.Approver, error) {
+	switch as.Backend {
+	case config.ApprovalBackendKDialog:
+		return approval.NewKDialogApprover(execRunner), nil
+	case config.ApprovalBackendTailscaleRelay:
+		client := approval.NewHTTPRelayClient(as.TailscaleRelay.ControlURL, nil)
+		return approval.NewTailscaleApprover(
+			client,
+			time.Duration(as.TailscaleRelay.PollIntervalSeconds)*time.Second,
+			time.Duration(as.TailscaleRelay.TimeoutSeconds)*time.Second,
+		), nil
+	default:
+		return nil, fmt.Errorf("unsupported approval_source.backend %q", as.Backend)
 	}
 }
 

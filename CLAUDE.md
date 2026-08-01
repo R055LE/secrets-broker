@@ -17,8 +17,11 @@ agent the token directly.
 
 ## Architecture
 
-- `cmd/secrets-broker/` — Composition root. The only place real adapters (Secret Service, kdialog,
-  bws, JSONL audit log) are constructed and wired together.
+- `cmd/secrets-broker/` — Composition root for the broker binary. The only place real adapters
+  (token Resolver, Approver, BWSRunner, JSONL audit log) are constructed and wired together.
+- `cmd/secrets-broker-relay/` — Composition root for the **separate** relay binary. Never runs on
+  the same host as `secrets-broker` in a real deployment — see ADR-0008. Uses stdlib `flag`, not
+  cobra: single-purpose daemon, no subcommands.
 - `internal/cli/` — cobra plumbing only. No policy/security logic — that all lives in
   `internal/broker`.
 - `internal/broker/` — The orchestrator. `broker.go` contains the entire deny-by-default decision
@@ -27,7 +30,13 @@ agent the token directly.
   (desktop, shells out to `secret-tool` — not `kwallet-query`, whose write path is broken; see
   ADR-0006), `EnvResolver` and `FileResolver` (headless; see ADR-0007). The composition root
   (`internal/cli/run.go`'s `newResolver`) picks one based on `config.TokenSource.Backend`.
-- `internal/approval/` — `Approver` interface + `KDialogApprover` (v1's only implementation).
+- `internal/approval/` — `Approver` interface + `KDialogApprover` (desktop) and
+  `TailscaleApprover` (remote, via `RelayClient`/`HTTPRelayClient` talking to a
+  `secrets-broker-relay` — ADR-0008/0009). The composition root's `newApprover` picks one based on
+  `config.ApprovalSource.Backend`.
+- `internal/relay/` — The relay's own logic: `Store` (in-memory, expiring, mutex-guarded) and the
+  two HTTP handlers (`NewControlHandler`, `NewDecisionHandler`) `cmd/secrets-broker-relay` wires
+  together. Neither handler checks caller identity — that's Tailscale ACLs' job (ADR-0009).
 - `internal/runner/` — `Runner` interface + `BWSRunner`, which shells out to `bws run`.
 - `internal/audit/` — `Logger` interface + `JSONLLogger`, append-only, write-before-exec/
   finalize-after.
@@ -48,6 +57,7 @@ task test:integration  # Real Secret Service/bws, local-only. Needs SECRETS_BROK
                         # (skips cleanly if unset); kdialog approval is verified manually, not by this suite
 task lint               # golangci-lint
 task build              # Build binary to bin/secrets-broker
+task build:relay        # Build bin/secrets-broker-relay — deploy on a SEPARATE device, see ADR-0008
 ```
 
 ## Key Constraints
@@ -72,13 +82,25 @@ task build              # Build binary to bin/secrets-broker
   approval and never falling back to an alternate credential source. Full matrix in
   `internal/broker/broker.go` and README.
 - `KDialogApprover` requires an active desktop session — a real, documented limitation, not an
-  assumption baked into the architecture (ADR-0003). `EnvResolver`/`FileResolver` (ADR-0007) remove
-  that requirement for token resolution specifically, but **there is no headless `Approver` yet** —
-  a deployment with `approval` set to anything but `"never"` on a box with no desktop session will
-  hang or fail. Don't treat the Resolver split as having solved headless deployment in general;
-  it solved half of it. **If implementing the remote `Approver`: it must not listen on the
-  broker's own host.** A same-host listener bound to the tailscale interface doesn't stop the
-  invoking agent from reaching it directly by shell — that traffic never crosses the tailnet, so
-  binding to a tailscale IP alone grants no protection against the one caller this gate exists to
-  stop. The decision-granting endpoint belongs on a separate always-on device (see ADR-0008).
+  assumption baked into the architecture (ADR-0003). `EnvResolver`/`FileResolver` (ADR-0007) solve
+  headless token resolution; `TailscaleApprover` + `secrets-broker-relay` (ADR-0008/0009) solve
+  headless approval — together these cover headless deployment, but the two pieces are genuinely
+  separate and were built in separate sessions; don't assume one implies the other is done.
+- **`secrets-broker-relay` must never run on the same host as `secrets-broker` in a real
+  deployment.** A same-host listener bound to the tailscale interface doesn't stop the invoking
+  agent from reaching it directly by shell — that traffic never crosses the tailnet, so binding to
+  a tailscale IP alone grants no protection against the one caller this gate exists to stop
+  (ADR-0008). The default `127.0.0.1` listen addresses in `cmd/secrets-broker-relay` are for local
+  testing only — production use requires binding to the relay's actual tailscale IP.
+- **`internal/relay`'s HTTP handlers must never check caller identity themselves.** That's
+  deliberate, not an oversight — the two-port split (ADR-0009) exists specifically so Tailscale
+  ACLs enforce who can reach which port, with zero application-level auth code. Adding a token or
+  header check "for defense in depth" would be scope creep against the explicit design; if the ACL
+  model turns out to be insufficient, that's a reason to revisit ADR-0008/0009, not to bolt on
+  extra checks unilaterally.
+- **Real Tailscale ACL enforcement for the relay is unverified** — everything about the protocol
+  and code is tested (including a real localhost round trip), but proving an actual ACL policy
+  restricts the control vs decision port to different peers needs a real tailnet with two devices,
+  which this environment doesn't have. Don't describe this as proven in any future doc update
+  without it actually having been checked.
 - Exact argv matching only in `internal/policy` — no globs, no shell-string parsing (ADR-0005).

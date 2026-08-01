@@ -1,3 +1,6 @@
 /bin/
+/dist/
+/secrets-broker
+/secrets-broker-relay
 *.test
 *.out

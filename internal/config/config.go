@@ -28,18 +28,34 @@ const (
 //     where the token is injected at process start (systemd, container).
 //   - BackendFile: a single file path, for the Docker-secrets/Kubernetes-
 //     Secret-volume convention.
-//
-// A remote-approval Approver counterpart for headless deployments is
-// deliberately not built alongside these — see decisions/0007.
 const (
 	BackendSecretService = "secret-service"
 	BackendEnv           = "env"
 	BackendFile          = "file"
 )
 
+// Supported approval_source.backend values.
+//   - ApprovalBackendKDialog: `kdialog --yesno` on a live desktop session.
+//     The default when approval_source is omitted entirely, preserving
+//     existing config files' behavior.
+//   - ApprovalBackendTailscaleRelay: a remote decision via a
+//     secrets-broker-relay running on a separate device — see
+//     decisions/0008 and decisions/0009 for why it has to be a separate
+//     device and how the control/decision port split works.
+const (
+	ApprovalBackendKDialog        = "kdialog"
+	ApprovalBackendTailscaleRelay = "tailscale-relay"
+)
+
+const (
+	defaultRelayPollIntervalSeconds = 2
+	defaultRelayTimeoutSeconds      = 300
+)
+
 type Config struct {
-	TokenSource TokenSource `toml:"token_source"`
-	Projects    []Project   `toml:"projects"`
+	TokenSource    TokenSource    `toml:"token_source"`
+	ApprovalSource ApprovalSource `toml:"approval_source"`
+	Projects       []Project      `toml:"projects"`
 }
 
 type TokenSource struct {
@@ -54,6 +70,20 @@ type EnvSource struct {
 
 type FileSource struct {
 	Path string `toml:"path"`
+}
+
+type ApprovalSource struct {
+	Backend        string               `toml:"backend"`
+	TailscaleRelay TailscaleRelaySource `toml:"tailscale_relay"`
+}
+
+type TailscaleRelaySource struct {
+	// ControlURL is the relay's control-port base URL, e.g.
+	// "http://100.x.y.z:7620" — must be the relay's tailscale IP, not a
+	// LAN or public address, or the whole point is lost.
+	ControlURL          string `toml:"control_url"`
+	PollIntervalSeconds int    `toml:"poll_interval_seconds"`
+	TimeoutSeconds      int    `toml:"timeout_seconds"`
 }
 
 type Project struct {
@@ -106,6 +136,18 @@ func (c *Config) applyDefaults() {
 			c.Projects[i].Approval = ApprovalNever
 		}
 	}
+
+	if c.ApprovalSource.Backend == "" {
+		c.ApprovalSource.Backend = ApprovalBackendKDialog
+	}
+	if c.ApprovalSource.Backend == ApprovalBackendTailscaleRelay {
+		if c.ApprovalSource.TailscaleRelay.PollIntervalSeconds == 0 {
+			c.ApprovalSource.TailscaleRelay.PollIntervalSeconds = defaultRelayPollIntervalSeconds
+		}
+		if c.ApprovalSource.TailscaleRelay.TimeoutSeconds == 0 {
+			c.ApprovalSource.TailscaleRelay.TimeoutSeconds = defaultRelayTimeoutSeconds
+		}
+	}
 }
 
 func (c *Config) validate() error {
@@ -122,6 +164,17 @@ func (c *Config) validate() error {
 		}
 	default:
 		return fmt.Errorf("token_source.backend %q is not supported (must be one of %q, %q, %q)", c.TokenSource.Backend, BackendSecretService, BackendEnv, BackendFile)
+	}
+
+	switch c.ApprovalSource.Backend {
+	case ApprovalBackendKDialog:
+		// no backend-specific config required
+	case ApprovalBackendTailscaleRelay:
+		if c.ApprovalSource.TailscaleRelay.ControlURL == "" {
+			return errors.New(`approval_source.tailscale_relay.control_url is required when backend is "tailscale-relay"`)
+		}
+	default:
+		return fmt.Errorf("approval_source.backend %q is not supported (must be one of %q, %q)", c.ApprovalSource.Backend, ApprovalBackendKDialog, ApprovalBackendTailscaleRelay)
 	}
 
 	if len(c.Projects) == 0 {

@@ -1,0 +1,11 @@
+[token_source]
+backend = "secret-service"
+
+[approval_source]
+backend = "tailscale-relay"
+
+[[projects]]
+alias          = "claude-code"
+bws_project_id = "00000000-0000-0000-0000-000000000000"
+token_entry    = "claude-code-agent"
+approval       = "prompt"
