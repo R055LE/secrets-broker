@@ -1,0 +1,23 @@
+# Generated from catalog/fleet.yaml in R055LE/runbook. Do not edit here.
+# Change the source and run `scripts/catalog.py apply`; edits made here
+# are reported as drift and overwritten.
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: secrets-broker
+  annotations:
+    github.com/project-slug: R055LE/secrets-broker
+  tags:
+    - ai-agents
+    - bitwarden
+    - go
+    - products
+    - secrets-management
+    - security
+    - service
+spec:
+  type: service
+  lifecycle: experimental
+  owner: R055LE
+  domain: products
+  tier: 1
