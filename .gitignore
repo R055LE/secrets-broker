@@ -4,3 +4,8 @@
 /secrets-broker-relay
 *.test
 *.out
+
+# Local-only Claude state (project-shared config stays committed)
+.claude/settings.local.json
+.claude/worktrees/
+CLAUDE.local.md
