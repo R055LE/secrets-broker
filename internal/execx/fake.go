@@ -30,6 +30,7 @@ type Call struct {
 	Name   string
 	Args   []string
 	Env    []string
+	Dir    string
 }
 
 func (f *FakeRunner) Run(ctx context.Context, name string, args []string, env []string) (Result, error) {
@@ -37,8 +38,8 @@ func (f *FakeRunner) Run(ctx context.Context, name string, args []string, env []
 	return f.RunResult, f.RunErr
 }
 
-func (f *FakeRunner) RunPassthrough(ctx context.Context, name string, args []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-	f.Calls = append(f.Calls, Call{Method: "RunPassthrough", Name: name, Args: args, Env: env})
+func (f *FakeRunner) RunPassthrough(ctx context.Context, name string, args []string, env []string, dir string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	f.Calls = append(f.Calls, Call{Method: "RunPassthrough", Name: name, Args: args, Env: env, Dir: dir})
 	if f.PassthroughStdout != "" {
 		_, _ = io.WriteString(stdout, f.PassthroughStdout)
 	}

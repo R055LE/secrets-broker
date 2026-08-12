@@ -77,6 +77,36 @@ func TestControlHandler_RegisterEmptyPromptRejected(t *testing.T) {
 	}
 }
 
+func TestControlHandler_RejectsOversizedPrompt(t *testing.T) {
+	store := relay.NewStore()
+	control := relay.NewControlHandler(store, time.Minute)
+
+	rec := postJSON(t, control, "/requests/req-1", map[string]string{"prompt": strings.Repeat("x", 17<<10)})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400", rec.Code)
+	}
+}
+
+func TestControlHandler_RejectsInvalidRequestID(t *testing.T) {
+	store := relay.NewStore()
+	control := relay.NewControlHandler(store, time.Minute)
+
+	rec := postJSON(t, control, "/requests/bad$id", map[string]string{"prompt": "prompt"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400", rec.Code)
+	}
+}
+
+func TestControlHandler_RejectsNonASCIIRequestID(t *testing.T) {
+	store := relay.NewStore()
+	control := relay.NewControlHandler(store, time.Minute)
+
+	rec := postJSON(t, control, "/requests/request-é", map[string]string{"prompt": "prompt"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400", rec.Code)
+	}
+}
+
 func TestControlHandler_RegisterDuplicateRejected(t *testing.T) {
 	store := relay.NewStore()
 	control := relay.NewControlHandler(store, time.Minute)
@@ -192,6 +222,15 @@ func TestDecisionHandler_ApprovalPageShowsPromptAndButtons(t *testing.T) {
 	}
 	if !strings.Contains(body, `value="approve"`) || !strings.Contains(body, `value="deny"`) {
 		t.Fatalf("page missing approve/deny form controls: %s", body)
+	}
+	if rec.Header().Get("X-Frame-Options") != "DENY" {
+		t.Fatalf("approval page must deny framing, got %q", rec.Header().Get("X-Frame-Options"))
+	}
+	if !strings.Contains(rec.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+		t.Fatalf("approval page missing CSP frame protection: %q", rec.Header().Get("Content-Security-Policy"))
+	}
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("approval page must not be cached, got %q", rec.Header().Get("Cache-Control"))
 	}
 }
 

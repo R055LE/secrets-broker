@@ -42,10 +42,15 @@ type Request struct {
 type Store struct {
 	mu       sync.Mutex
 	requests map[string]*Request
+	limit    int
 }
 
 func NewStore() *Store {
-	return &Store{requests: make(map[string]*Request)}
+	return NewStoreWithLimit(1024)
+}
+
+func NewStoreWithLimit(limit int) *Store {
+	return &Store{requests: make(map[string]*Request), limit: limit}
 }
 
 // Create registers a new pending request. Returns an error if id is
@@ -58,6 +63,9 @@ func (s *Store) Create(id, prompt string, ttl time.Duration) error {
 
 	if _, exists := s.requests[id]; exists {
 		return fmt.Errorf("request %q already exists", id)
+	}
+	if len(s.requests) >= s.limit {
+		return errors.New("request store is full")
 	}
 
 	now := time.Now()

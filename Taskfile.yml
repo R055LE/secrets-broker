@@ -24,6 +24,11 @@ tasks:
     cmds:
       - go build -ldflags="-s -w" -o bin/secrets-broker-relay ./cmd/secrets-broker-relay
 
+  build:worker:
+    desc: Build the fixed-path worker installed root-owned under /usr/local/libexec
+    cmds:
+      - go build -ldflags="-s -w" -o bin/secrets-broker-worker ./cmd/secrets-broker-worker
+
   test:
     desc: Run the hermetic unit test suite (no KWallet/kdialog/bws required)
     cmds:
@@ -31,10 +36,10 @@ tasks:
 
   test:integration:
     desc: >
-      Run integration tests against real Secret Service and bws — local-only. Requires
-      SECRETS_BROKER_TEST_TOKEN_ENTRY, SECRETS_BROKER_TEST_PROJECT_ID, and
-      SECRETS_BROKER_TEST_SECRET_NAME env vars (SECRETS_BROKER_TEST_SECRET_VALUE optional);
-      tests skip cleanly if unset.
+      Run integration tests against real bws and the deployed isolated runner hop. Run as the
+      secrets-broker account. Requires SECRETS_BROKER_TEST_TOKEN_FILE,
+      SECRETS_BROKER_TEST_PROJECT_ID, and SECRETS_BROKER_TEST_SECRET_NAME env vars
+      (SECRETS_BROKER_TEST_SECRET_VALUE optional); tests skip cleanly if unset.
     cmds:
       - go test -tags=integration ./... -race -count=1
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 )
 
@@ -89,7 +90,7 @@ func (c *HTTPRelayClient) Poll(ctx context.Context, id string) (RelayStatus, err
 	var view struct {
 		Status RelayStatus `json:"status"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&view); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&view); err != nil {
 		return "", fmt.Errorf("decoding poll response: %w", err)
 	}
 	return view.Status, nil

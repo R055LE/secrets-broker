@@ -84,7 +84,7 @@ func TestJSONLLogger_StartThenFinishAppendsTwoLines(t *testing.T) {
 
 func TestJSONLLogger_MultipleRunsGetDistinctIDs(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "audit.jsonl")
+	path := filepath.Join(dir, "private", "audit.jsonl")
 	logger, err := audit.NewJSONLLogger(path)
 	if err != nil {
 		t.Fatalf("NewJSONLLogger: %v", err)
@@ -94,5 +94,19 @@ func TestJSONLLogger_MultipleRunsGetDistinctIDs(t *testing.T) {
 	id2, _ := logger.Start(context.Background(), audit.StartRecord{Project: "p", Argv: []string{"b"}})
 	if id1 == id2 {
 		t.Fatalf("expected distinct run IDs, got %q twice", id1)
+	}
+}
+
+func TestJSONLLogger_RejectsNonRegularFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private", "audit.jsonl")
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatalf("creating directory at audit path: %v", err)
+	}
+	logger, err := audit.NewJSONLLogger(path)
+	if err == nil {
+		_, err = logger.Start(context.Background(), audit.StartRecord{Project: "p", Argv: []string{"true"}})
+	}
+	if err == nil {
+		t.Fatal("expected a directory audit target to be rejected")
 	}
 }

@@ -29,7 +29,7 @@ type Runner interface {
 	// command behaves like it was invoked directly, and so the broker never
 	// holds the wrapped command's output (which may itself be sensitive) in
 	// its own memory.
-	RunPassthrough(ctx context.Context, name string, args []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (exitCode int, err error)
+	RunPassthrough(ctx context.Context, name string, args []string, env []string, dir string, stdin io.Reader, stdout, stderr io.Writer) (exitCode int, err error)
 }
 
 // OSRunner is the real Runner, backed by os/exec.
@@ -63,8 +63,9 @@ func (OSRunner) Run(ctx context.Context, name string, args []string, env []strin
 	return result, nil
 }
 
-func (OSRunner) RunPassthrough(ctx context.Context, name string, args []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+func (OSRunner) RunPassthrough(ctx context.Context, name string, args []string, env []string, dir string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
 	if env != nil {
 		cmd.Env = env
 	}

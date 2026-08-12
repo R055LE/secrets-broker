@@ -1,6 +1,7 @@
 # ADR-0006: Secret Service (`secret-tool`) over the native `kwallet-query` CLI
 
-**Status:** Accepted
+**Status:** Superseded for deployment by [ADR-0010](0010-isolated-worker-and-runner-uids.md).
+Secret Service remains a legacy adapter, but the isolated worker accepts only a service-owned file.
 **Date:** 2026-08-01
 **Deciders:** Ross
 

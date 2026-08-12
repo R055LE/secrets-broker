@@ -3,8 +3,9 @@ package token
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
+
+	"github.com/R055LE/secrets-broker/internal/securefile"
 )
 
 // FileResolver resolves the bootstrap token from a single configured file
@@ -20,21 +21,7 @@ func NewFileResolver(path string) *FileResolver {
 }
 
 func (r *FileResolver) Resolve(ctx context.Context, entry string) (Token, error) {
-	info, err := os.Stat(r.path)
-	if err != nil {
-		return Token{}, fmt.Errorf("stating token file %q: %w", r.path, err)
-	}
-
-	// Refuse a file readable/writable by group or other — a common, cheap
-	// -to-catch misconfiguration. Secret Service has a daemon mediating
-	// access; a plain file has only filesystem permissions, so this
-	// backend has to enforce that itself rather than trust the caller got
-	// it right.
-	if info.Mode().Perm()&0o077 != 0 {
-		return Token{}, fmt.Errorf("token file %q permissions are too open (%v) — must not be readable or writable by group or other", r.path, info.Mode().Perm())
-	}
-
-	data, err := os.ReadFile(r.path)
+	data, err := securefile.Read(r.path, 64<<10, 0o077, false)
 	if err != nil {
 		return Token{}, fmt.Errorf("reading token file %q: %w", r.path, err)
 	}

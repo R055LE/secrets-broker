@@ -37,6 +37,16 @@ func TestStore_CreateDuplicateIDFails(t *testing.T) {
 	}
 }
 
+func TestStore_CapacityLimit(t *testing.T) {
+	s := relay.NewStoreWithLimit(1)
+	if err := s.Create("req-1", "prompt", time.Minute); err != nil {
+		t.Fatalf("creating first request: %v", err)
+	}
+	if err := s.Create("req-2", "prompt", time.Minute); err == nil {
+		t.Fatal("expected a full store to reject another request")
+	}
+}
+
 func TestStore_GetUnknownID(t *testing.T) {
 	s := relay.NewStore()
 	_, err := s.Get("nonexistent")

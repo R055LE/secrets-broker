@@ -1,5 +1,5 @@
-// Command secrets-broker is the composition root: the only place real
-// adapters (Secret Service, kdialog, bws, JSONL audit log) are wired together.
+// Command secrets-broker is the unprivileged, agent-facing client. The fixed
+// worker process owns all policy, approval, token, audit, and runner adapters.
 package main
 
 import (

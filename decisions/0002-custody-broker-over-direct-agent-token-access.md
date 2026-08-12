@@ -1,6 +1,7 @@
 # ADR-0002: A custody broker holds the bootstrap token, not the agent
 
-**Status:** Accepted
+**Status:** Amended by [ADR-0010](0010-isolated-worker-and-runner-uids.md). A separate process
+under the caller's UID was not a custody boundary.
 **Date:** 2026-07-31
 **Deciders:** Ross
 

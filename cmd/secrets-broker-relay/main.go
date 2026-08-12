@@ -13,6 +13,7 @@ import (
 	"errors"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -44,11 +45,23 @@ func main() {
 		logger.Error("control-addr and decision-addr must differ — the whole point is that they're reachable by different tailnet peers")
 		os.Exit(1)
 	}
+	if err := validateListenAddr(*controlAddr); err != nil {
+		logger.Error("invalid control-addr", "err", err)
+		os.Exit(1)
+	}
+	if err := validateListenAddr(*decisionAddr); err != nil {
+		logger.Error("invalid decision-addr", "err", err)
+		os.Exit(1)
+	}
+	if *ttl <= 0 || *sweepInterval <= 0 || *sweepAfter < 0 {
+		logger.Error("ttl and sweep-interval must be positive; sweep-after must not be negative")
+		os.Exit(1)
+	}
 
 	store := relay.NewStore()
 
-	controlServer := &http.Server{Addr: *controlAddr, Handler: withLogging(logger, "control", relay.NewControlHandler(store, *ttl))}
-	decisionServer := &http.Server{Addr: *decisionAddr, Handler: withLogging(logger, "decision", relay.NewDecisionHandler(store))}
+	controlServer := newHTTPServer(*controlAddr, withLogging(logger, "control", relay.NewControlHandler(store, *ttl)))
+	decisionServer := newHTTPServer(*decisionAddr, withLogging(logger, "decision", relay.NewDecisionHandler(store)))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -91,6 +104,32 @@ func main() {
 	defer cancel()
 	_ = controlServer.Shutdown(shutdownCtx)
 	_ = decisionServer.Shutdown(shutdownCtx)
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+}
+
+func validateListenAddr(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return errors.New("host must be an IP address")
+	}
+	if ip.IsUnspecified() {
+		return errors.New("unspecified addresses such as 0.0.0.0 and [::] are not allowed")
+	}
+	return nil
 }
 
 // withLogging logs method + path for every request — the request ID is
