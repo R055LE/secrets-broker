@@ -31,9 +31,14 @@ func NewControlHandler(store *Store, ttl time.Duration) http.Handler {
 
 	mux.HandleFunc("POST /requests/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if !validID(id) {
+			http.Error(w, "invalid request id", http.StatusBadRequest)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 
 		var body createRequestBody
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Prompt == "" {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Prompt == "" || len(body.Prompt) > 8<<10 {
 			http.Error(w, "invalid request body: prompt is required", http.StatusBadRequest)
 			return
 		}
@@ -49,6 +54,10 @@ func NewControlHandler(store *Store, ttl time.Duration) http.Handler {
 
 	mux.HandleFunc("GET /requests/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if !validID(id) {
+			http.Error(w, "invalid request id", http.StatusBadRequest)
+			return
+		}
 
 		req, err := store.Get(id)
 		if err != nil {
@@ -83,6 +92,10 @@ func NewDecisionHandler(store *Store) http.Handler {
 
 	mux.HandleFunc("GET /requests/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if !validID(id) {
+			http.Error(w, "invalid request id", http.StatusBadRequest)
+			return
+		}
 
 		req, err := store.Get(id)
 		if err != nil {
@@ -103,6 +116,11 @@ func NewDecisionHandler(store *Store) http.Handler {
 		}
 
 		id := r.PathValue("id")
+		if !validID(id) {
+			http.Error(w, "invalid request id", http.StatusBadRequest)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 
 		decision, err := readDecision(r)
 		if err != nil {
@@ -204,6 +222,11 @@ func sameOrigin(r *http.Request) bool {
 // just-submitted confirmation) to show.
 func writeApprovalPage(w http.ResponseWriter, id, prompt, status string, showButtons bool) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
 
 	var body string
 	switch {
@@ -228,6 +251,19 @@ func writeApprovalPage(w http.ResponseWriter, id, prompt, status string, showBut
 	}
 
 	_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>secrets-broker</title></head><body style="font-family:sans-serif;max-width:32em;margin:2em auto;padding:0 1em;">%s</body></html>`, body)
+}
+
+func validID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func viewOf(req Request) requestView {
