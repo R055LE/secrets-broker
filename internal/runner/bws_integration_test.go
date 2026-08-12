@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -14,35 +15,46 @@ import (
 	"github.com/R055LE/secrets-broker/internal/token"
 )
 
-// Real bws, real Secret Service resolution, real Bitwarden Secrets Manager
-// project — the actual end-to-end path, not fakes. Requires
-// SECRETS_BROKER_TEST_PROJECT_ID / _TOKEN_ENTRY / _SECRET_NAME to point at
-// a real project with a machine account and a throwaway test secret;
-// SECRETS_BROKER_TEST_SECRET_VALUE is optional, for asserting the exact
-// value rather than just "non-empty."
+// Real bws, real file resolution, the deployed runner sudo hop, and a real
+// Bitwarden Secrets Manager project. Run this as the secrets-broker worker
+// account after installing deploy/secrets-broker.sudoers. The token file must
+// be owned by that account and mode 0600 or tighter.
 func TestBWSRunner_Integration_RealSecretInjection(t *testing.T) {
 	projectID := os.Getenv("SECRETS_BROKER_TEST_PROJECT_ID")
-	tokenEntry := os.Getenv("SECRETS_BROKER_TEST_TOKEN_ENTRY")
+	tokenPath := os.Getenv("SECRETS_BROKER_TEST_TOKEN_FILE")
 	secretName := os.Getenv("SECRETS_BROKER_TEST_SECRET_NAME")
-	if projectID == "" || tokenEntry == "" || secretName == "" {
-		t.Skip("SECRETS_BROKER_TEST_PROJECT_ID / _TOKEN_ENTRY / _SECRET_NAME not set — skipping integration test against real bws")
+	if projectID == "" || tokenPath == "" || secretName == "" {
+		t.Skip("SECRETS_BROKER_TEST_PROJECT_ID / _TOKEN_FILE / _SECRET_NAME not set; skipping integration test against real bws")
 	}
 
-	resolver := token.NewSecretServiceResolver(execx.OSRunner{})
-	tok, err := resolver.Resolve(context.Background(), tokenEntry)
+	resolver := token.NewFileResolver(tokenPath)
+	tok, err := resolver.Resolve(context.Background(), "")
 	if err != nil {
 		t.Fatalf("resolving token: %v", err)
 	}
 
-	r := runner.NewBWSRunner(execx.OSRunner{})
+	bwsBinary, err := exec.LookPath("bws")
+	if err != nil {
+		t.Fatalf("finding bws: %v", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("resolving home: %v", err)
+	}
+	workingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("resolving working directory: %v", err)
+	}
+	r := runner.NewBWSRunner(execx.OSRunner{}, bwsBinary, os.Getenv("PATH"), home)
 	var stdout bytes.Buffer
 	result, err := r.Run(context.Background(), runner.RunSpec{
-		ProjectID: projectID,
-		Token:     tok,
-		Argv:      []string{"printenv", secretName},
-		Stdin:     &bytes.Buffer{},
-		Stdout:    &stdout,
-		Stderr:    &bytes.Buffer{},
+		ProjectID:  projectID,
+		Token:      tok,
+		WorkingDir: workingDir,
+		Argv:       []string{"printenv", secretName},
+		Stdin:      &bytes.Buffer{},
+		Stdout:     &stdout,
+		Stderr:     &bytes.Buffer{},
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -61,25 +73,38 @@ func TestBWSRunner_Integration_RealSecretInjection(t *testing.T) {
 }
 
 func TestBWSRunner_Integration_BadProjectIDFailsCleanly(t *testing.T) {
-	tokenEntry := os.Getenv("SECRETS_BROKER_TEST_TOKEN_ENTRY")
-	if tokenEntry == "" {
-		t.Skip("SECRETS_BROKER_TEST_TOKEN_ENTRY not set — skipping")
+	tokenPath := os.Getenv("SECRETS_BROKER_TEST_TOKEN_FILE")
+	if tokenPath == "" {
+		t.Skip("SECRETS_BROKER_TEST_TOKEN_FILE not set; skipping")
 	}
 
-	resolver := token.NewSecretServiceResolver(execx.OSRunner{})
-	tok, err := resolver.Resolve(context.Background(), tokenEntry)
+	resolver := token.NewFileResolver(tokenPath)
+	tok, err := resolver.Resolve(context.Background(), "")
 	if err != nil {
 		t.Fatalf("resolving token: %v", err)
 	}
 
-	r := runner.NewBWSRunner(execx.OSRunner{})
+	bwsBinary, err := exec.LookPath("bws")
+	if err != nil {
+		t.Fatalf("finding bws: %v", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("resolving home: %v", err)
+	}
+	workingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("resolving working directory: %v", err)
+	}
+	r := runner.NewBWSRunner(execx.OSRunner{}, bwsBinary, os.Getenv("PATH"), home)
 	result, err := r.Run(context.Background(), runner.RunSpec{
-		ProjectID: "00000000-0000-0000-0000-000000000000",
-		Token:     tok,
-		Argv:      []string{"echo", "should-not-print"},
-		Stdin:     &bytes.Buffer{},
-		Stdout:    &bytes.Buffer{},
-		Stderr:    &bytes.Buffer{},
+		ProjectID:  "00000000-0000-0000-0000-000000000000",
+		Token:      tok,
+		WorkingDir: workingDir,
+		Argv:       []string{"echo", "should-not-print"},
+		Stdin:      &bytes.Buffer{},
+		Stdout:     &bytes.Buffer{},
+		Stderr:     &bytes.Buffer{},
 	})
 	// bws itself starts fine and exits nonzero (404 from the API) — this is
 	// a Runner-level "executed with a nonzero exit," not a Go error. See

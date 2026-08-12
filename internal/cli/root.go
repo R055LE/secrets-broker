@@ -1,7 +1,6 @@
-// Package cli is cobra plumbing only — flag parsing and wiring real
-// adapters into internal/broker. No policy/security logic lives here; that
-// all belongs in internal/broker, where it's fully unit tested against
-// fakes.
+// Package cli is unprivileged cobra plumbing. It only constructs a bounded
+// request for the fixed isolated worker; no policy or adapter selection lives
+// in the caller's process.
 package cli
 
 import (

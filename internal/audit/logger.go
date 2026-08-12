@@ -11,8 +11,9 @@ import "context"
 // invocation — before touching the token resolver, before checking the
 // allowlist, before any approval prompt.
 type StartRecord struct {
-	Project string
-	Argv    []string // the requested command, never secret values
+	Project    string
+	WorkingDir string
+	Argv       []string // the requested command, never secret values
 }
 
 // FinishRecord is written once the broker has reached a final outcome.

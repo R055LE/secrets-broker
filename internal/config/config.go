@@ -5,9 +5,12 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/R055LE/secrets-broker/internal/securefile"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -53,9 +56,19 @@ const (
 )
 
 type Config struct {
+	Runtime        Runtime        `toml:"runtime"`
 	TokenSource    TokenSource    `toml:"token_source"`
 	ApprovalSource ApprovalSource `toml:"approval_source"`
 	Projects       []Project      `toml:"projects"`
+}
+
+// Runtime contains paths owned by the trusted worker deployment. These are
+// optional for parsing legacy configs, but ValidateWorker requires them before
+// a credential-bearing worker starts.
+type Runtime struct {
+	BWSBinary   string `toml:"bws_binary"`
+	CommandPath string `toml:"command_path"`
+	Home        string `toml:"home"`
 }
 
 type TokenSource struct {
@@ -90,6 +103,7 @@ type Project struct {
 	Alias        string       `toml:"alias"`
 	BWSProjectID string       `toml:"bws_project_id"`
 	TokenEntry   string       `toml:"token_entry"`
+	WorkingDir   string       `toml:"working_dir"`
 	Approval     string       `toml:"approval"`
 	Allow        []AllowEntry `toml:"allow"`
 }
@@ -115,7 +129,20 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading config: %w", err)
 	}
+	return load(data)
+}
 
+// LoadWorker applies ownership, type, symlink, size, and permission checks
+// before parsing the credential-bearing worker's policy.
+func LoadWorker(path string) (*Config, error) {
+	data, err := securefile.Read(path, 1<<20, 0o022, true)
+	if err != nil {
+		return nil, fmt.Errorf("reading config: %w", err)
+	}
+	return load(data)
+}
+
+func load(data []byte) (*Config, error) {
 	var cfg Config
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
@@ -173,6 +200,19 @@ func (c *Config) validate() error {
 		if c.ApprovalSource.TailscaleRelay.ControlURL == "" {
 			return errors.New(`approval_source.tailscale_relay.control_url is required when backend is "tailscale-relay"`)
 		}
+		relayURL, err := url.Parse(c.ApprovalSource.TailscaleRelay.ControlURL)
+		if err != nil || relayURL.Scheme != "http" || relayURL.Host == "" || relayURL.User != nil || relayURL.Path != "" || relayURL.RawQuery != "" || relayURL.Fragment != "" {
+			return errors.New("approval_source.tailscale_relay.control_url must be an http origin with no credentials, path, query, or fragment")
+		}
+		if c.ApprovalSource.TailscaleRelay.PollIntervalSeconds <= 0 {
+			return errors.New("approval_source.tailscale_relay.poll_interval_seconds must be greater than zero")
+		}
+		if c.ApprovalSource.TailscaleRelay.TimeoutSeconds <= 0 {
+			return errors.New("approval_source.tailscale_relay.timeout_seconds must be greater than zero")
+		}
+		if c.ApprovalSource.TailscaleRelay.PollIntervalSeconds >= c.ApprovalSource.TailscaleRelay.TimeoutSeconds {
+			return errors.New("approval_source.tailscale_relay.poll_interval_seconds must be less than timeout_seconds")
+		}
 	default:
 		return fmt.Errorf("approval_source.backend %q is not supported (must be one of %q, %q)", c.ApprovalSource.Backend, ApprovalBackendKDialog, ApprovalBackendTailscaleRelay)
 	}
@@ -209,6 +249,42 @@ func (c *Config) validate() error {
 		}
 	}
 
+	return nil
+}
+
+// ValidateWorker rejects configurations that would put the credential-bearing
+// worker back in the caller's trust domain. The public config parser remains
+// backward-compatible for migration tooling; the worker calls this before
+// constructing any adapter.
+func (c *Config) ValidateWorker() error {
+	if c.TokenSource.Backend != BackendFile {
+		return fmt.Errorf("worker requires token_source.backend %q", BackendFile)
+	}
+	if !filepath.IsAbs(c.TokenSource.File.Path) {
+		return errors.New("token_source.file.path must be an absolute path")
+	}
+	if c.ApprovalSource.Backend != ApprovalBackendTailscaleRelay {
+		return fmt.Errorf("worker requires approval_source.backend %q", ApprovalBackendTailscaleRelay)
+	}
+	if !filepath.IsAbs(c.Runtime.BWSBinary) {
+		return errors.New("runtime.bws_binary must be an absolute path")
+	}
+	if !filepath.IsAbs(c.Runtime.Home) {
+		return errors.New("runtime.home must be an absolute path")
+	}
+	if c.Runtime.CommandPath == "" {
+		return errors.New("runtime.command_path is required")
+	}
+	for _, dir := range strings.Split(c.Runtime.CommandPath, string(os.PathListSeparator)) {
+		if !filepath.IsAbs(dir) {
+			return fmt.Errorf("runtime.command_path entry %q must be absolute", dir)
+		}
+	}
+	for _, p := range c.Projects {
+		if !filepath.IsAbs(p.WorkingDir) {
+			return fmt.Errorf("project %q: working_dir must be an absolute path", p.Alias)
+		}
+	}
 	return nil
 }
 

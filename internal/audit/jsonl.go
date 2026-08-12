@@ -10,24 +10,26 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/R055LE/secrets-broker/internal/securefile"
 )
 
 // record is the on-disk shape of one JSONL line. Start and Finish each
 // write one record, sharing RunID; Event distinguishes them.
 type record struct {
-	RunID     string    `json:"run_id"`
-	Timestamp time.Time `json:"timestamp"`
-	Event     string    `json:"event"` // "start" | "finish"
-	Project   string    `json:"project,omitempty"`
-	Argv      []string  `json:"argv,omitempty"`
-	Outcome   string    `json:"outcome,omitempty"`
-	ExitCode  *int      `json:"exit_code,omitempty"`
+	RunID      string    `json:"run_id"`
+	Timestamp  time.Time `json:"timestamp"`
+	Event      string    `json:"event"` // "start" | "finish"
+	Project    string    `json:"project,omitempty"`
+	WorkingDir string    `json:"working_dir,omitempty"`
+	Argv       []string  `json:"argv,omitempty"`
+	Outcome    string    `json:"outcome,omitempty"`
+	ExitCode   *int      `json:"exit_code,omitempty"`
 }
 
-// JSONLLogger appends one JSON object per line to a local file. Opened in
-// O_APPEND mode and guarded by an in-process mutex; POSIX guarantees
-// O_APPEND writes at or below PIPE_BUF are atomic against other writers to
-// the same file, which is enough for a single-host audit log.
+// JSONLLogger appends one JSON object per line to a local file. O_APPEND keeps
+// concurrent worker processes from racing the file offset; the mutex keeps
+// goroutines sharing one logger from overlapping writes.
 type JSONLLogger struct {
 	mu   sync.Mutex
 	path string
@@ -36,6 +38,9 @@ type JSONLLogger struct {
 func NewJSONLLogger(path string) (*JSONLLogger, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("creating audit log directory: %w", err)
+	}
+	if err := securefile.ValidatePrivateDir(filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("validating audit log directory: %w", err)
 	}
 	return &JSONLLogger{path: path}, nil
 }
@@ -47,11 +52,12 @@ func (l *JSONLLogger) Start(ctx context.Context, rec StartRecord) (string, error
 	}
 
 	err = l.append(record{
-		RunID:     runID,
-		Timestamp: time.Now().UTC(),
-		Event:     "start",
-		Project:   rec.Project,
-		Argv:      rec.Argv,
+		RunID:      runID,
+		Timestamp:  time.Now().UTC(),
+		Event:      "start",
+		Project:    rec.Project,
+		WorkingDir: rec.WorkingDir,
+		Argv:       rec.Argv,
 	})
 	if err != nil {
 		return "", err
@@ -73,7 +79,7 @@ func (l *JSONLLogger) append(rec record) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	f, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := securefile.OpenAppend(l.path, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening audit log: %w", err)
 	}
@@ -87,6 +93,9 @@ func (l *JSONLLogger) append(rec record) error {
 
 	if _, err := f.Write(line); err != nil {
 		return fmt.Errorf("writing audit record: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("syncing audit record: %w", err)
 	}
 	return nil
 }

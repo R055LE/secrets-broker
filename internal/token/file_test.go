@@ -40,6 +40,22 @@ func TestFileResolver_MissingFile(t *testing.T) {
 	}
 }
 
+func TestFileResolver_RejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("s3cr3t-token"), 0o600); err != nil {
+		t.Fatalf("writing target: %v", err)
+	}
+	link := filepath.Join(dir, "token")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("creating symlink: %v", err)
+	}
+
+	if _, err := token.NewFileResolver(link).Resolve(context.Background(), "entry"); err == nil {
+		t.Fatal("expected symlink token file to be rejected")
+	}
+}
+
 func TestFileResolver_EmptyFile(t *testing.T) {
 	path := writeTestFile(t, "", 0o600)
 

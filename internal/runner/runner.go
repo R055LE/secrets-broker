@@ -11,9 +11,10 @@ import (
 
 // RunSpec describes one approved command execution.
 type RunSpec struct {
-	ProjectID string
-	Token     token.Token
-	Argv      []string // the wrapped command and its arguments, e.g. ["git", "push"]
+	ProjectID  string
+	Token      token.Token
+	WorkingDir string
+	Argv       []string // the wrapped command and its arguments, e.g. ["git", "push"]
 
 	Stdin  io.Reader
 	Stdout io.Writer

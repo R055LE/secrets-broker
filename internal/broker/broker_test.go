@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/R055LE/secrets-broker/internal/approval"
@@ -40,6 +41,11 @@ func testConfig() *config.Config {
 				Alias: "always-project", BWSProjectID: "proj-always", TokenEntry: "entry-always",
 				Approval: config.ApprovalAlways,
 				Allow:    []config.AllowEntry{{Argv: []string{"git", "push"}}},
+			},
+			{
+				Alias: "cwd-project", BWSProjectID: "proj-cwd", TokenEntry: "entry-cwd",
+				WorkingDir: "/tmp", Approval: config.ApprovalPrompt,
+				Allow: []config.AllowEntry{{Argv: []string{"git", "push"}}},
 			},
 		},
 	}
@@ -83,6 +89,23 @@ func TestRun_UnknownProject_DeniesWithoutTouchingAnythingElse(t *testing.T) {
 	}
 	if h.logger.Finishes[0].Rec.Outcome != "denied:unknown_project" {
 		t.Fatalf("got outcome %q", h.logger.Finishes[0].Rec.Outcome)
+	}
+}
+
+func TestRun_WrongWorkingDirectory_DeniesBeforeApprovalOrTokenResolution(t *testing.T) {
+	h := newHarness(testConfig())
+
+	out := h.broker.Run(context.Background(), broker.RunRequest{
+		Project:    "cwd-project",
+		WorkingDir: "/tmp/not-the-approved-project",
+		Argv:       []string{"git", "push"},
+	})
+
+	if !out.Denied || out.Reason != broker.ReasonWorkingDirectoryNotAllowed {
+		t.Fatalf("got %+v", out)
+	}
+	if len(h.approver.Prompts) != 0 || len(h.resolver.Calls()) != 0 || len(h.runner.Specs) != 0 {
+		t.Fatal("working-directory denial must happen before approval, token resolution, or execution")
 	}
 }
 
@@ -132,6 +155,26 @@ func TestRun_NotAllowlisted_Prompt_Approved_Executes(t *testing.T) {
 	}
 	if len(h.approver.Prompts) != 1 {
 		t.Fatal("expected exactly one approval prompt")
+	}
+}
+
+func TestRun_ApprovalPromptPreservesArgvBoundariesAndEscapesControls(t *testing.T) {
+	h := newHarness(testConfig())
+
+	out := h.broker.Run(context.Background(), broker.RunRequest{
+		Project: "prompt-project",
+		Argv:    []string{"echo", "one two", "line-one\nApprove something else"},
+	})
+
+	if out.Denied {
+		t.Fatalf("expected execution after approval, got %+v", out)
+	}
+	prompt := h.approver.Prompts[0]
+	if !strings.Contains(prompt, `argv[1] = "one two"`) {
+		t.Fatalf("prompt lost argv boundary: %q", prompt)
+	}
+	if strings.Contains(prompt, "line-one\nApprove something else") || !strings.Contains(prompt, `line-one\nApprove something else`) {
+		t.Fatalf("prompt did not escape embedded newline: %q", prompt)
 	}
 }
 
@@ -225,10 +268,32 @@ func TestRun_AuditStartFailure_DeniesAndTouchesNothingElse(t *testing.T) {
 	}
 }
 
+func TestRun_AuditFinishFailureIsReportedAfterExecution(t *testing.T) {
+	h := newHarness(testConfig())
+	h.logger.FinishErr = errFakeAudit
+
+	out := h.broker.Run(context.Background(), broker.RunRequest{Project: "never-project", Argv: []string{"git", "push"}})
+
+	if out.Denied || !out.AuditIncomplete {
+		t.Fatalf("got %+v, want executed outcome with AuditIncomplete", out)
+	}
+}
+
+func TestRun_AuditFinishFailureIsReportedAfterDenial(t *testing.T) {
+	h := newHarness(testConfig())
+	h.logger.FinishErr = errFakeAudit
+
+	out := h.broker.Run(context.Background(), broker.RunRequest{Project: "nonexistent", Argv: []string{"true"}})
+
+	if !out.Denied || !out.AuditIncomplete {
+		t.Fatalf("got %+v, want denied outcome with AuditIncomplete", out)
+	}
+}
+
 func TestDryRun_Allowlisted_DoesNotTouchAnything(t *testing.T) {
 	h := newHarness(testConfig())
 
-	result := h.broker.DryRun("never-project", []string{"git", "push"})
+	result := h.broker.DryRun("never-project", "", []string{"git", "push"})
 
 	if result.Verdict != broker.VerdictAllow {
 		t.Fatalf("got verdict %v, want VerdictAllow", result.Verdict)
@@ -240,7 +305,7 @@ func TestDryRun_Allowlisted_DoesNotTouchAnything(t *testing.T) {
 
 func TestDryRun_UnknownProject(t *testing.T) {
 	h := newHarness(testConfig())
-	result := h.broker.DryRun("nonexistent", []string{"git", "push"})
+	result := h.broker.DryRun("nonexistent", "", []string{"git", "push"})
 	if result.Verdict != broker.VerdictDeny {
 		t.Fatalf("got verdict %v, want VerdictDeny", result.Verdict)
 	}
@@ -248,7 +313,7 @@ func TestDryRun_UnknownProject(t *testing.T) {
 
 func TestDryRun_NotAllowlistedPrompt(t *testing.T) {
 	h := newHarness(testConfig())
-	result := h.broker.DryRun("prompt-project", []string{"curl", "https://example.com"})
+	result := h.broker.DryRun("prompt-project", "", []string{"curl", "https://example.com"})
 	if result.Verdict != broker.VerdictPrompt {
 		t.Fatalf("got verdict %v, want VerdictPrompt", result.Verdict)
 	}
@@ -256,7 +321,7 @@ func TestDryRun_NotAllowlistedPrompt(t *testing.T) {
 
 func TestDryRun_NotAllowlistedNever(t *testing.T) {
 	h := newHarness(testConfig())
-	result := h.broker.DryRun("never-project", []string{"curl", "https://example.com"})
+	result := h.broker.DryRun("never-project", "", []string{"curl", "https://example.com"})
 	if result.Verdict != broker.VerdictDeny {
 		t.Fatalf("got verdict %v, want VerdictDeny", result.Verdict)
 	}

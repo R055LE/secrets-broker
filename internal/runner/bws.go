@@ -4,30 +4,34 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/R055LE/secrets-broker/internal/execx"
 )
 
-// passthroughEnvVars is the deliberate, minimal set of vars copied from the
-// broker's own environment into bws's. bws needs at least these to run at
-// all (PATH to find its own dependencies, HOME to resolve ~/.config/bws);
-// LANG avoids locale warnings from wrapped commands. Nothing else survives
-// — see decisions/0004-bws-run-for-injection-over-manual-export.md for why
-// this is built explicitly rather than via bws's own --no-inherit-env flag.
-var passthroughEnvVars = []string{"PATH", "HOME", "LANG"}
+const (
+	isolatedSudoBinary = "/usr/bin/sudo"
+	isolatedRunnerUser = "secrets-broker-runner"
+)
 
 // BWSRunner shells out to `bws run`. It's v1's only Runner implementation —
 // the interface exists so a future backend swap doesn't touch broker.go,
 // not because multiple backends are planned right now.
 type BWSRunner struct {
-	execRunner execx.Runner
-	bwsBinary  string
+	execRunner  execx.Runner
+	bwsBinary   string
+	commandPath string
+	home        string
 }
 
-func NewBWSRunner(execRunner execx.Runner) *BWSRunner {
-	return &BWSRunner{execRunner: execRunner, bwsBinary: "bws"}
+func NewBWSRunner(execRunner execx.Runner, bwsBinary, commandPath, home string) *BWSRunner {
+	return &BWSRunner{
+		execRunner:  execRunner,
+		bwsBinary:   bwsBinary,
+		commandPath: commandPath,
+		home:        home,
+	}
 }
 
 func (r *BWSRunner) Run(ctx context.Context, spec RunSpec) (Result, error) {
@@ -40,15 +44,35 @@ func (r *BWSRunner) Run(ctx context.Context, spec RunSpec) (Result, error) {
 	if spec.Token.Empty() {
 		return Result{}, errors.New("runner: empty token")
 	}
+	if !filepath.IsAbs(r.bwsBinary) {
+		return Result{}, errors.New("runner: bws binary must be an absolute path")
+	}
+	if spec.WorkingDir == "" {
+		return Result{}, errors.New("runner: empty working directory")
+	}
 
-	args := []string{"run", "--project-id", spec.ProjectID, "--"}
+	// bws starts only the fixed sudo hop as the credential-owning worker. bws
+	// removes BWS_ACCESS_TOKEN before spawning its child; --no-inherit-env also
+	// clears the worker's remaining runtime environment. sudo then changes to
+	// the separate runner UID before the requested command executes. SETENV is
+	// narrowly granted so the project secrets survive sudo's environment reset.
+	args := []string{
+		"run", "--project-id", spec.ProjectID, "--no-inherit-env", "--",
+		shellQuote(isolatedSudoBinary),
+		shellQuote("-n"),
+		shellQuote("-E"),
+		shellQuote("-H"),
+		shellQuote("-u"),
+		shellQuote(isolatedRunnerUser),
+		shellQuote("--"),
+	}
 	for _, tok := range spec.Argv {
 		args = append(args, shellQuote(tok))
 	}
 
-	env := buildEnv(spec.Token.Value())
+	env := buildEnv(spec.Token.Value(), r.commandPath, r.home)
 
-	exitCode, err := r.execRunner.RunPassthrough(ctx, r.bwsBinary, args, env, spec.Stdin, spec.Stdout, spec.Stderr)
+	exitCode, err := r.execRunner.RunPassthrough(ctx, r.bwsBinary, args, env, spec.WorkingDir, spec.Stdin, spec.Stdout, spec.Stderr)
 	if err != nil {
 		return Result{}, fmt.Errorf("running bws: %w", err)
 	}
@@ -67,13 +91,11 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func buildEnv(tokenValue string) []string {
-	env := make([]string, 0, len(passthroughEnvVars)+1)
-	for _, name := range passthroughEnvVars {
-		if v, ok := os.LookupEnv(name); ok {
-			env = append(env, name+"="+v)
-		}
+func buildEnv(tokenValue, commandPath, home string) []string {
+	return []string{
+		"PATH=" + commandPath,
+		"HOME=" + home,
+		"LANG=C.UTF-8",
+		"BWS_ACCESS_TOKEN=" + tokenValue,
 	}
-	env = append(env, "BWS_ACCESS_TOKEN="+tokenValue)
-	return env
 }

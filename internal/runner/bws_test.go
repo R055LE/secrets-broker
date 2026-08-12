@@ -25,13 +25,8 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
-func TestBuildEnv_OnlyPassthroughVarsAndToken(t *testing.T) {
-	t.Setenv("PATH", "/usr/bin")
-	t.Setenv("HOME", "/home/test")
-	t.Setenv("LANG", "en_US.UTF-8")
-	t.Setenv("SOME_UNRELATED_SECRET", "should-not-appear")
-
-	env := buildEnv("my-token")
+func TestBuildEnv_UsesTrustedRuntimeValuesAndToken(t *testing.T) {
+	env := buildEnv("my-token", "/usr/bin:/bin", "/var/lib/secrets-broker")
 
 	joined := strings.Join(env, "\n")
 	if strings.Contains(joined, "SOME_UNRELATED_SECRET") {
@@ -40,22 +35,23 @@ func TestBuildEnv_OnlyPassthroughVarsAndToken(t *testing.T) {
 	if !strings.Contains(joined, "BWS_ACCESS_TOKEN=my-token") {
 		t.Fatalf("buildEnv missing token: %v", env)
 	}
-	if !strings.Contains(joined, "PATH=/usr/bin") || !strings.Contains(joined, "HOME=/home/test") {
+	if !strings.Contains(joined, "PATH=/usr/bin:/bin") || !strings.Contains(joined, "HOME=/var/lib/secrets-broker") {
 		t.Fatalf("buildEnv missing expected passthrough vars: %v", env)
 	}
 }
 
 func TestBWSRunner_Run_PassesQuotedArgvAndScopedEnv(t *testing.T) {
 	fake := &execx.FakeRunner{PassthroughExitCode: 0}
-	r := NewBWSRunner(fake)
+	r := NewBWSRunner(fake, "/usr/local/bin/bws", "/usr/bin:/bin", "/var/lib/secrets-broker")
 
 	spec := RunSpec{
-		ProjectID: "proj-1",
-		Token:     token.New("s3cr3t"),
-		Argv:      []string{"git", "commit", "-m", "fix: something"},
-		Stdin:     &bytes.Buffer{},
-		Stdout:    &bytes.Buffer{},
-		Stderr:    &bytes.Buffer{},
+		ProjectID:  "proj-1",
+		Token:      token.New("s3cr3t"),
+		WorkingDir: "/tmp",
+		Argv:       []string{"git", "commit", "-m", "fix: something"},
+		Stdin:      &bytes.Buffer{},
+		Stdout:     &bytes.Buffer{},
+		Stderr:     &bytes.Buffer{},
 	}
 
 	result, err := r.Run(context.Background(), spec)
@@ -73,11 +69,18 @@ func TestBWSRunner_Run_PassesQuotedArgvAndScopedEnv(t *testing.T) {
 	if call.Method != "RunPassthrough" {
 		t.Fatalf("expected RunPassthrough, got %s", call.Method)
 	}
-	if call.Name != "bws" {
-		t.Fatalf("expected bws binary, got %s", call.Name)
+	if call.Name != "/usr/local/bin/bws" {
+		t.Fatalf("expected fixed bws binary, got %s", call.Name)
+	}
+	if call.Dir != "/tmp" {
+		t.Fatalf("got working directory %q, want /tmp", call.Dir)
 	}
 
-	wantArgs := []string{"run", "--project-id", "proj-1", "--", "'git'", "'commit'", "'-m'", "'fix: something'"}
+	wantArgs := []string{
+		"run", "--project-id", "proj-1", "--no-inherit-env", "--",
+		"'/usr/bin/sudo'", "'-n'", "'-E'", "'-H'", "'-u'", "'secrets-broker-runner'", "'--'",
+		"'git'", "'commit'", "'-m'", "'fix: something'",
+	}
 	if strings.Join(call.Args, "|") != strings.Join(wantArgs, "|") {
 		t.Fatalf("got args %v, want %v", call.Args, wantArgs)
 	}
@@ -95,7 +98,7 @@ func TestBWSRunner_Run_PassesQuotedArgvAndScopedEnv(t *testing.T) {
 
 func TestBWSRunner_Run_RejectsEmptyArgv(t *testing.T) {
 	fake := &execx.FakeRunner{}
-	r := NewBWSRunner(fake)
+	r := NewBWSRunner(fake, "/usr/local/bin/bws", "/usr/bin:/bin", "/var/lib/secrets-broker")
 
 	_, err := r.Run(context.Background(), RunSpec{ProjectID: "proj-1", Token: token.New("t")})
 	if err == nil {
@@ -108,7 +111,7 @@ func TestBWSRunner_Run_RejectsEmptyArgv(t *testing.T) {
 
 func TestBWSRunner_Run_RejectsEmptyToken(t *testing.T) {
 	fake := &execx.FakeRunner{}
-	r := NewBWSRunner(fake)
+	r := NewBWSRunner(fake, "/usr/local/bin/bws", "/usr/bin:/bin", "/var/lib/secrets-broker")
 
 	_, err := r.Run(context.Background(), RunSpec{ProjectID: "proj-1", Argv: []string{"echo"}})
 	if err == nil {
@@ -121,12 +124,13 @@ func TestBWSRunner_Run_RejectsEmptyToken(t *testing.T) {
 
 func TestBWSRunner_Run_PropagatesNonZeroExit(t *testing.T) {
 	fake := &execx.FakeRunner{PassthroughExitCode: 7}
-	r := NewBWSRunner(fake)
+	r := NewBWSRunner(fake, "/usr/local/bin/bws", "/usr/bin:/bin", "/var/lib/secrets-broker")
 
 	result, err := r.Run(context.Background(), RunSpec{
-		ProjectID: "proj-1",
-		Token:     token.New("t"),
-		Argv:      []string{"false"},
+		ProjectID:  "proj-1",
+		Token:      token.New("t"),
+		WorkingDir: "/tmp",
+		Argv:       []string{"false"},
 	})
 	if err != nil {
 		t.Fatalf("a nonzero wrapped-command exit is not a Runner error: %v", err)
