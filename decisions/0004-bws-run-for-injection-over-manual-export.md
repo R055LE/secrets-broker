@@ -9,7 +9,8 @@ the isolated worker now uses `--no-inherit-env` before changing to a separate ru
 shared an identity. ADR-0010 introduces worker and runner UIDs. The worker now passes
 `--no-inherit-env`, starts a fixed sudo hop, and uses `sudo -H` for the runner's home. `bws` still
 removes its own access token before spawning the child; the flag clears the rest of the worker
-runtime environment while the narrow runner sudoers rule preserves BWS project secrets.
+runtime environment while a worker-scoped sudoers `env_keep` rule preserves BWS project secrets.
+This avoids `sudo -E`, which sudo-rs 0.2.x accepts but ignores.
 
 ## Context
 

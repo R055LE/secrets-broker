@@ -54,13 +54,14 @@ func (r *BWSRunner) Run(ctx context.Context, spec RunSpec) (Result, error) {
 	// bws starts only the fixed sudo hop as the credential-owning worker. bws
 	// removes BWS_ACCESS_TOKEN before spawning its child; --no-inherit-env also
 	// clears the worker's remaining runtime environment. sudo then changes to
-	// the separate runner UID before the requested command executes. SETENV is
-	// narrowly granted so the project secrets survive sudo's environment reset.
+	// the separate runner UID before the requested command executes. The
+	// worker-scoped sudoers env_keep rule carries that already-cleared BWS
+	// environment across the hop without relying on sudo -E, which sudo-rs
+	// 0.2.x accepts but ignores.
 	args := []string{
 		"run", "--project-id", spec.ProjectID, "--no-inherit-env", "--",
 		shellQuote(isolatedSudoBinary),
 		shellQuote("-n"),
-		shellQuote("-E"),
 		shellQuote("-H"),
 		shellQuote("-u"),
 		shellQuote(isolatedRunnerUser),

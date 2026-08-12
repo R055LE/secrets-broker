@@ -78,7 +78,7 @@ func TestBWSRunner_Run_PassesQuotedArgvAndScopedEnv(t *testing.T) {
 
 	wantArgs := []string{
 		"run", "--project-id", "proj-1", "--no-inherit-env", "--",
-		"'/usr/bin/sudo'", "'-n'", "'-E'", "'-H'", "'-u'", "'secrets-broker-runner'", "'--'",
+		"'/usr/bin/sudo'", "'-n'", "'-H'", "'-u'", "'secrets-broker-runner'", "'--'",
 		"'git'", "'commit'", "'-m'", "'fix: something'",
 	}
 	if strings.Join(call.Args, "|") != strings.Join(wantArgs, "|") {
