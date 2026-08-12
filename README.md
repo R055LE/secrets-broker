@@ -105,6 +105,13 @@ session.
    traversable by `secrets-broker` and usable by `secrets-broker-runner`. Log out and back in after
    changing client-group membership.
 
+   If the working directory is below a private home directory, grant the service accounts traverse
+   permission on the home directory without adding them to the user's group:
+
+   ```bash
+   sudo setfacl -m u:secrets-broker:--x,u:secrets-broker-runner:--x "$HOME"
+   ```
+
 4. Provision the BWS access token as the worker account. The token must not be typed into an agent
    prompt, command argument, environment file, or shell history.
 
@@ -113,13 +120,20 @@ session.
      'umask 077; read -rsp "BWS access token: " token; printf "\n" >&2; printf %s "$token" > /var/lib/secrets-broker/bws-access-token'
    ```
 
-5. Run the relay on a separate device, then configure its Tailscale IP in policy. The relay has a
-   broker-only control port and an approver-only decision port:
+5. Install the relay on a separate device, then configure its Tailscale IP in policy. The relay
+   has a broker-only control port and an approver-only decision port. A hardened systemd unit and
+   environment-file example are in `deploy/`:
 
    ```bash
-   secrets-broker-relay \
-     -control-addr <relay-tailscale-ip>:7620 \
-     -decision-addr <relay-tailscale-ip>:7621
+   sudo install -Dm0755 bin/secrets-broker-relay /usr/local/bin/secrets-broker-relay
+   sudo install -d -o root -g root -m 0755 /etc/secrets-broker-relay
+   sudo install -o root -g root -m 0644 deploy/secrets-broker-relay.env.example \
+     /etc/secrets-broker-relay/environment
+   sudoedit /etc/secrets-broker-relay/environment
+   sudo install -o root -g root -m 0644 deploy/secrets-broker-relay.service \
+     /etc/systemd/system/secrets-broker-relay.service
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now secrets-broker-relay.service
    ```
 
    Tailscale ACLs must restrict the control port to the broker host and the decision port to the
