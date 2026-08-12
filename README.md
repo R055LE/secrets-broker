@@ -1,202 +1,173 @@
 # secrets-broker
 
-> A custody broker between an AI coding agent and Bitwarden Secrets Manager — the agent asks, a
-> human's desktop decides, the vault never talks to the agent directly.
+`secrets-broker` lets an AI coding agent request a secret-bearing command without giving the
+agent Bitwarden's bootstrap token or direct access to the resulting secret environment.
 
-## Why this exists
+The security boundary is a fixed, no-argument worker launched as a dedicated Linux user. The
+agent-facing CLI only sends a bounded JSON request containing the project alias, resolved working
+directory, exact argv, and dry-run flag. Policy, credentials, executable paths, and audit paths
+come from the worker's fixed deployment, never from caller flags or environment variables.
 
-I pay for Bitwarden and had Secrets Manager sitting there enabled and basically unused. The
-official path to giving an AI coding agent access to it is Bitwarden's own MCP server — which
-hands the agent direct, interactive read/write access to a whole vault. My agent already has an
-unrestricted shell. Handing it full vault access on top of that felt like the wrong shape of
-solution: more surface area, not less.
+```text
+agent UID
+  secrets-broker run ...
+    -> sudo fixed worker                 secrets-broker UID
+       -> bws run --no-inherit-env
+          -> sudo approved command       secrets-broker-runner UID
+```
 
-Bitwarden Secrets Manager's `bws run` command gets closer — it injects secrets straight into a
-child process's environment without the calling process ever seeing the values. That solves
-secret *value* exposure. It doesn't solve the bootstrap credential problem: something still has
-to hold the `BWS_ACCESS_TOKEN` that authenticates to Bitwarden in the first place, and if that
-something is the agent's own shell, an allowlist or an approval step is just policy on paper —
-nothing stops the agent from calling `bws` directly.
+The three identities matter:
 
-So: a separate broker. It holds the bootstrap token. The agent never does. Every secret-using
-command the agent wants to run goes through it, gated by a per-project allowlist, a human
-approval prompt for anything not pre-approved, and an append-only audit log of every attempt —
-approved or not.
+- The agent cannot read the worker's token file, config, audit log, or process environment.
+- The runner receives project secrets but cannot read the bootstrap token or alter the audit log.
+- `BWS_ACCESS_TOKEN` is cleared before `bws` starts the runner-side sudo hop.
 
-Tools like this already exist (doppler, teller, chamber, 1Password's `op run`, Vault agent).
-Building one anyway was the point — see [`decisions/`](decisions/) for the actual reasoning, not
-just the result.
+See [ADR-0010](decisions/0010-isolated-worker-and-runner-uids.md) for the finding that forced this
+shape and the alternatives considered.
 
-## What this demonstrates
+## What is enforced
 
-- Secret *values* never pass through the broker's own process — `bws run` injects directly into
-  the wrapped command's environment.
-- The bootstrap access token never touches the agent's environment, and never sits in a plaintext
-  dotfile — it's resolved on demand, per invocation, from the OS keyring (Secret Service), an env
-  var, or a permission-checked file, depending on deployment target.
-- Exact-argv allowlisting with no shell-string parsing — nothing to quote-escape, nothing
-  ambiguous about what's allowed.
-- A human desktop prompt (`kdialog`) gates anything not pre-approved. There is no bypass flag, on
-  purpose — see [ADR-0002](decisions/0002-custody-broker-over-direct-agent-token-access.md).
-- An append-only JSONL audit trail, written *before* the command runs and finalized after —
-  borrowed from an earlier lab's [audit-before-forwarding pattern](#related-projects).
-- Deny-by-default at every failure point: unknown project, missing config, a broken approval
-  prompt, a failed token lookup — all hard denials, never an implicit approval.
-- Fully interface-seamed (`Resolver`, `Approver`, `Runner`, `Logger`) so the entire decision
-  matrix is unit tested against fakes — `go test ./...` needs no real Secret Service, `kdialog`,
-  or `bws` present.
+- Fixed `/usr/local/libexec/secrets-broker-worker` invocation with no arguments.
+- Fixed `/etc/secrets-broker/policy.toml` and `/var/log/secrets-broker/audit.jsonl` paths.
+- Root-owned policy and executable deployment, plus symlink, owner, mode, type, and size checks on
+  sensitive files.
+- File-only bootstrap token resolution and remote approval through a separate Tailscale relay.
+- Exact argv matching and an exact, symlink-resolved working directory for every project.
+- A trusted `bws` path, `PATH`, and `HOME`. The agent's environment is not inherited.
+- Audit start records written and synced before policy, approval, token resolution, or execution.
+- Bounded worker and relay request bodies, bounded relay state, server timeouts, and hardened
+  approval-page response headers.
 
-## Quick start
+There are two deliberate limits:
+
+1. The wrapped command receives every secret in the configured BWS project. Its stdout and stderr
+   are returned to the caller. Do not approve commands whose purpose is to print secrets.
+2. Exact argv and cwd do not make agent-controlled files safe. Git hooks, package scripts,
+   Terraform providers, plugins, config files, and similar state can change what a command does.
+   Do not allowlist such commands directly from an agent-writable tree. Use a root-owned operation
+   wrapper that validates or disables those extension points, then allowlist the wrapper's exact
+   argv. A human approval prompt shows argv and cwd; it cannot attest to hidden filesystem state.
+
+## Build
+
+Requires Go 1.26.5 and [Task](https://taskfile.dev/).
 
 ```bash
+task test
+task vet
+task lint
 task build
-cp policy.example.toml ~/.config/secrets-broker/policy.toml
-# edit policy.toml: paste your BWS Secrets Manager project UUID
+task build:worker
+task build:relay
 ```
 
-Store the bootstrap token yourself, interactively — never through the agent. This needs
-`secret-tool` (`libsecret-tools` package): the native `kwallet-query -w` looks like the obvious
-way to do this on KDE, but on kwallet6 6.24.0 it reports success while silently failing to
-persist a new folder or entry — verified against the on-disk wallet file and KWallet's own D-Bus
-API directly, not assumed (see [ADR-0006](decisions/0006-secret-service-over-kwallet-query-cli.md)).
-`secret-tool` talks to the same underlying keyring via the standard Secret Service API and
-round-trips correctly:
+The local lint task expects `golangci-lint` on `PATH`. CI pins its own version.
+
+## Install the isolated worker
+
+These are administrator steps. Run token provisioning from a trusted terminal outside the agent
+session.
+
+1. Create the two service accounts and the client group:
+
+   ```bash
+   sudo useradd --system --create-home --home-dir /var/lib/secrets-broker \
+     --shell /usr/sbin/nologin secrets-broker
+   sudo useradd --system --create-home --home-dir /var/lib/secrets-broker-runner \
+     --shell /usr/sbin/nologin secrets-broker-runner
+   sudo chmod 0700 /var/lib/secrets-broker /var/lib/secrets-broker-runner
+   sudo groupadd --system secrets-broker-clients
+   sudo usermod -aG secrets-broker-clients "$USER"
+   ```
+
+2. Install root-owned executables. Install the Bitwarden `bws` binary at the exact path named in
+   policy.
+
+   ```bash
+   install -Dm0755 bin/secrets-broker "$HOME/.local/bin/secrets-broker"
+   sudo install -Dm0755 bin/secrets-broker-worker /usr/local/libexec/secrets-broker-worker
+   sudo install -Dm0755 /path/to/bws /usr/local/bin/bws
+   ```
+
+3. Install policy, audit storage, and sudoers rules:
+
+   ```bash
+   sudo install -d -o root -g root -m 0755 /etc/secrets-broker
+   sudo install -o root -g secrets-broker -m 0640 policy.example.toml \
+     /etc/secrets-broker/policy.toml
+   sudo install -d -o secrets-broker -g secrets-broker -m 0700 /var/log/secrets-broker
+   sudo install -o root -g root -m 0440 deploy/secrets-broker.sudoers \
+     /etc/sudoers.d/secrets-broker
+   sudo visudo -cf /etc/sudoers.d/secrets-broker
+   ```
+
+   Edit `/etc/secrets-broker/policy.toml` as root. The configured working directory must be
+   traversable by `secrets-broker` and usable by `secrets-broker-runner`. Log out and back in after
+   changing client-group membership.
+
+4. Provision the BWS access token as the worker account. The token must not be typed into an agent
+   prompt, command argument, environment file, or shell history.
+
+   ```bash
+   sudo -u secrets-broker /bin/bash -c \
+     'umask 077; read -rsp "BWS access token: " token; printf "\n" >&2; printf %s "$token" > /var/lib/secrets-broker/bws-access-token'
+   ```
+
+5. Run the relay on a separate device, then configure its Tailscale IP in policy. The relay has a
+   broker-only control port and an approver-only decision port:
+
+   ```bash
+   secrets-broker-relay \
+     -control-addr <relay-tailscale-ip>:7620 \
+     -decision-addr <relay-tailscale-ip>:7621
+   ```
+
+   Tailscale ACLs must restrict the control port to the broker host and the decision port to the
+   approving device. The relay rejects wildcard listen addresses, but it does not authenticate
+   callers itself. See [ADR-0008](decisions/0008-tailscale-relay-approver-design.md) and
+   [ADR-0009](decisions/0009-two-port-relay-protocol.md).
+
+## Use
 
 ```bash
-secret-tool store --label='secrets-broker: claude-code-agent' service secrets-broker entry claude-code-agent
+secrets-broker run --project agent-project -- /usr/local/sbin/deploy-agent-project
 ```
 
-It won't print a prompt — it's silently waiting on stdin. Paste or type the token, then press
-Ctrl-D on its own line to signal end-of-input. (`secret-tool` reads everything up to EOF verbatim,
-trailing newline included, if you leave one — `SecretServiceResolver` trims that on read, so it
-doesn't actually matter either way, but Ctrl-D-terminated is the cleaner habit.)
-
-Confirm it landed using the exact read path `secrets-broker` itself uses:
+The CLI has no config, audit, token, worker, or approval override flags. `--dry-run` asks the same
+worker to resolve cwd and argv policy without approval, token access, execution, or an audit
+record:
 
 ```bash
-secret-tool lookup service secrets-broker entry claude-code-agent
+secrets-broker run --project agent-project --dry-run -- /usr/local/sbin/deploy-agent-project
 ```
 
-Then:
+Exit code 125 means the request was denied or the worker was unavailable. Exit code 126 means the
+request was approved but execution could not start. Otherwise the wrapped command's exit code is
+returned.
 
-```bash
-./bin/secrets-broker run --project claude-code -- printenv TEST_SECRET_NAME
+## Repository layout
+
+```text
+cmd/secrets-broker/        Agent-facing CLI
+cmd/secrets-broker-worker/ Fixed credential-owning worker
+cmd/secrets-broker-relay/  Approval relay for a separate device
+internal/worker/           Bounded request/response protocol and worker composition
+internal/broker/           Deny-by-default policy, approval, audit, and execution flow
+internal/securefile/       Sensitive-file open and validation helpers
+internal/token/            Bootstrap token resolvers; the worker permits file only
+internal/approval/         Approval adapters; the worker permits Tailscale relay only
+internal/runner/           bws invocation and isolated runner hop
+internal/audit/            Synced JSONL start/finish records
+internal/relay/            Bounded in-memory store and HTTP handlers
+internal/policy/           Exact argv matching
+internal/config/           TOML parsing and worker-specific validation
+decisions/                 Architecture decision records
+deploy/                    Administrator-owned deployment policy
 ```
 
-`--dry-run` resolves the policy decision (allow / would-prompt / deny) without touching Secret
-Service, without invoking `bws`, and without writing an audit record:
-
-```bash
-./bin/secrets-broker run --project claude-code --dry-run -- git push
-```
-
-## Headless deployment
-
-The desktop-only setup above uses `backend = "secret-service"`. For a systemd unit or container
-with no desktop session, no D-Bus session bus, and nothing to render `kdialog` into, two other
-`token_source.backend` values exist:
-
-```toml
-[token_source]
-backend = "env"
-
-[token_source.env]
-var = "SECRETS_BROKER_BOOTSTRAP_TOKEN"
-```
-
-or
-
-```toml
-[token_source]
-backend = "file"
-
-[token_source.file]
-path = "/run/secrets/bws-token"   # must be mode 0600 or tighter
-```
-
-Resolver-only, `KDialogApprover` still needs a live desktop session to render into —
-`approval = "prompt"` or `"always"` on a headless box hangs or fails outright unless the remote
-approver below is also configured. See [ADR-0007](decisions/0007-headless-env-and-file-resolvers.md).
-
-### Remote approval (`secrets-broker-relay`)
-
-`cmd/secrets-broker-relay` is a second binary — meant to run on a **separate, always-on device**,
-never the same host as `secrets-broker` itself. Binding the broker's own machine to a tailscale IP
-looks sufficient but isn't: a co-located process (the invoking agent) reaches that address directly
-without ever crossing the tailnet. See [ADR-0008](decisions/0008-tailscale-relay-approver-design.md)
-for that catch and why the fix is a separate device, and
-[ADR-0009](decisions/0009-two-port-relay-protocol.md) for the actual protocol.
-
-The relay exposes two ports — a **control port** (broker registers/polls) and a **decision port**
-(the approving device submits approve/deny) — specifically so a Tailscale ACL policy can restrict
-each to a different peer, with no application-level auth code at all. The decision port serves a
-minimal tap-to-approve HTML page at `GET /requests/<id>` — no app or scripting needed on the
-approving device, just open the link in any mobile browser and tap Approve or Deny. It also
-accepts a plain JSON `POST /requests/<id>/decide` (`{"decision":"approve"|"deny"}`) for scripted
-use, same endpoint either way.
-
-```
-secrets-broker-relay -control-addr <tailscale-ip>:7620 -decision-addr <tailscale-ip>:7621
-```
-
-Then point the broker's `policy.toml` at it:
-
-```toml
-[approval_source]
-backend = "tailscale-relay"
-
-[approval_source.tailscale_relay]
-control_url = "http://<relay-tailscale-ip>:7620"
-```
-
-An example Tailscale ACL policy restricting each port to a different tailnet peer is in
-[ADR-0009](decisions/0009-two-port-relay-protocol.md). **ACL enforcement is verified against a
-real tailnet**, not just tested against fakes: a phone (untagged, `autogroup:member`) reached the
-decision port, tapped Approve on a pending request, and the broker's `TailscaleApprover` observed
-the approval and ran the wrapped command. That pass ran the relay on the same host as the broker
-as a development stand-in for the production topology (see ADR-0008); confirming the
-same-host-vs-separate-device property in isolation is still open.
-
-## Project structure
-
-```
-cmd/secrets-broker/       Composition root — wires real adapters together
-cmd/secrets-broker-relay/ The approval relay — a separate binary, runs on a separate device
-internal/
-  cli/                 cobra plumbing only, no policy logic
-  broker/               The orchestrator — the whole deny-by-default matrix lives here
-  token/                Resolver interface + SecretServiceResolver, EnvResolver, FileResolver
-  approval/             Approver interface + KDialogApprover, TailscaleApprover, RelayClient
-  runner/               Runner interface + BWSRunner (shells out to `bws run`)
-  audit/                 Logger interface + JSONLLogger
-  policy/                Pure allowlist matching, no I/O
-  config/                policy.toml loading and validation
-  execx/                 Shared os/exec seam every adapter is built on
-  relay/                 The relay's own store + HTTP handlers (used by cmd/secrets-broker-relay)
-decisions/              ADRs — read before changing anything security-relevant
-```
-
-## Design decisions
-
-| Decision | Rationale |
-|---|---|
-| CLI wrapper, not an MCP server | The agent already has an unrestricted shell; a structured tool-call schema adds surface area without removing it. [ADR-0001](decisions/0001-cli-wrapper-over-mcp-server.md) |
-| A broker holds the token, not the agent | Otherwise the allowlist/audit/approval gate is just policy on paper — the agent could call `bws` directly. [ADR-0002](decisions/0002-custody-broker-over-direct-agent-token-access.md) |
-| `Resolver`/`Approver` interfaces, KWallet-backed keyring/kdialog as v1's only implementation | This machine's KDE session is where v1 runs, not what the tool is defined by — a container/headless deployment is an additive implementation, not a rewrite. [ADR-0003](decisions/0003-pluggable-resolver-kwallet-as-v1-reference-impl.md) |
-| `bws run` with explicit argv quoting and env construction | `bws` joins its command tokens and reparses them through a shell, and `--no-inherit-env` drops `HOME` with no way back — verified against `bws`'s own source before writing the adapter. [ADR-0004](decisions/0004-bws-run-for-injection-over-manual-export.md) |
-| Exact-argv allowlist matching, no globs | A prefix match would let `["terraform","apply"]` also satisfy `terraform apply -destroy`. [ADR-0005](decisions/0005-exact-argv-allowlist-matching-no-globs.md) |
-| Secret Service (`secret-tool`) over the native `kwallet-query` CLI | `kwallet-query -w` reports success while silently failing to persist, verified against the wallet file and D-Bus directly. [ADR-0006](decisions/0006-secret-service-over-kwallet-query-cli.md) |
-| `env`/`file` Resolver backends for headless deployment | Secret Service resolution kept working all weekend without a human present — it was the desktop-only `Approver` that actually failed. The `Resolver` half of headless deployment was the tractable piece to fix first. [ADR-0007](decisions/0007-headless-env-and-file-resolvers.md) |
-| Remote `Approver` design: relay on a separate device, not the broker's own host | A same-host listener bound to the tailscale interface doesn't stop the invoking agent from reaching it directly — that traffic never has to cross the tailnet at all. [ADR-0008](decisions/0008-tailscale-relay-approver-design.md) |
-| Two relay ports, no application-level auth | Tailscale ACLs work at IP:port, not HTTP paths — splitting register/poll from decide onto separate ports lets ACLs alone decide who can approve, no new auth code. [ADR-0009](decisions/0009-two-port-relay-protocol.md) |
-| No `--yes`/`--force` flag on `run`, ever | The agent is exactly the untrusted party the approval gate exists for. A bypass flag would make it theater. |
-
-## Related projects
-
-[`agentic-platform-lab`](../agentic-platform-lab) — this broker borrows its audit-before-forwarding
-proxy pattern directly: write the audit record before doing anything else, finalize it once a
-verdict is reached, so a crash mid-command leaves a detectable orphaned record instead of silence.
+Legacy Secret Service, environment-token, and `kdialog` adapters remain for migration and focused
+tests. `ValidateWorker` rejects them in the credential-bearing deployment.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

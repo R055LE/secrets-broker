@@ -1,46 +1,41 @@
-# Copy to $XDG_CONFIG_HOME/secrets-broker/policy.toml (default
-# ~/.config/secrets-broker/policy.toml) and fill in bws_project_id.
+# Installed root-owned at /etc/secrets-broker/policy.toml.
+# The worker rejects caller-selected paths and legacy desktop backends.
+
+[runtime]
+bws_binary = "/usr/local/bin/bws"
+command_path = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+home = "/var/lib/secrets-broker"
 
 [token_source]
-backend = "secret-service"   # "secret-service" | "env" | "file"
+backend = "file"
 
-# Only needed when backend = "secret-service" (no config needed for "env" or "file").
+[token_source.file]
+# Must be owned by the secrets-broker worker account and mode 0600 or tighter.
+path = "/var/lib/secrets-broker/bws-access-token"
 
-# Uncomment for backend = "env" — a single env var, injected by whatever starts the
-# process (systemd unit, container). Single-tenant: one broker process, one token.
-# [token_source.env]
-# var = "SECRETS_BROKER_BOOTSTRAP_TOKEN"
+[approval_source]
+backend = "tailscale-relay"
 
-# Uncomment for backend = "file" — a single file path (Docker-secrets/Kubernetes-
-# Secret-volume convention, usually tmpfs-backed). Must be mode 0600 or tighter —
-# resolution is refused if the file is readable or writable by group or other.
-# [token_source.file]
-# path = "/run/secrets/bws-token"
-
-# approval_source defaults to backend = "kdialog" (a live desktop session, kdialog --yesno)
-# if this whole section is omitted. Uncomment for a headless deployment using
-# secrets-broker-relay instead — see README's "Remote approval" section and
-# decisions/0008 and decisions/0009 before using this; control_url MUST be the
-# relay's tailscale IP, and the relay MUST run on a separate device from this broker.
-# [approval_source]
-# backend = "tailscale-relay"
-#
-# [approval_source.tailscale_relay]
-# control_url = "http://PASTE-RELAY-TAILSCALE-IP-HERE:7620"
-# poll_interval_seconds = 2    # omit for the default (2)
-# timeout_seconds = 300        # omit for the default (300 = 5 minutes)
+[approval_source.tailscale_relay]
+# The relay must run on a separate device. Its Tailscale ACL must expose this
+# control port only to the broker host. See decisions/0008 and 0009.
+control_url = "http://PASTE-RELAY-TAILSCALE-IP-HERE:7620"
+poll_interval_seconds = 2
+timeout_seconds = 300
 
 [[projects]]
-alias          = "claude-code"
+alias = "agent-project"
 bws_project_id = "PASTE-YOUR-BWS-SECRETS-MANAGER-PROJECT-UUID-HERE"
-# token_entry is looked up via `secret-tool lookup service secrets-broker entry <token_entry>`
-token_entry    = "claude-code-agent"
-approval       = "prompt"   # "always" | "prompt" | "never" — omit to default to "never"
+# Retained as the resolver interface's project-scoped lookup key. The isolated
+# file backend uses one token file and does not inspect this value.
+token_entry = "agent-project"
+# Requests from any other resolved working directory are denied.
+working_dir = "/home/YOUR-USER/code/YOUR-PROJECT"
+approval = "never" # "always" | "prompt" | "never"
 
   [[projects.allow]]
-  argv = ["printenv", "TEST_SECRET_NAME"]
+  argv = ["/usr/bin/printenv", "TEST_SECRET_NAME"]
 
-  # Add more allowlisted commands here, one [[projects.allow]] block per
-  # command, e.g.:
-  # [[projects.allow]]
-  # argv = ["git", "push"]
+  # Only allowlist commands whose behavior is not extended by hooks, plugins,
+  # config, or executable files from the agent-writable working tree. Put
+  # sensitive workflows in a root-owned wrapper and allowlist its exact argv.

@@ -1,6 +1,7 @@
 # ADR-0007: `env` and `file` Resolver backends for headless deployment
 
-**Status:** Accepted
+**Status:** Amended by [ADR-0010](0010-isolated-worker-and-runner-uids.md). The isolated worker
+accepts the file resolver and rejects caller-influenced environment tokens.
 **Date:** 2026-08-02
 **Deciders:** Ross
 

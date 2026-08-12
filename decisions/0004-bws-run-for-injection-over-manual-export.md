@@ -1,8 +1,15 @@
 # ADR-0004: `bws run` for secret injection, with explicit argv quoting and env construction
 
-**Status:** Accepted
+**Status:** Amended by [ADR-0010](0010-isolated-worker-and-runner-uids.md). Shell quoting remains;
+the isolated worker now uses `--no-inherit-env` before changing to a separate runner UID.
 **Date:** 2026-07-31
 **Deciders:** Ross
+
+**2026-08-12 update:** The environment decision below applied while broker and wrapped command
+shared an identity. ADR-0010 introduces worker and runner UIDs. The worker now passes
+`--no-inherit-env`, starts a fixed sudo hop, and uses `sudo -H` for the runner's home. `bws` still
+removes its own access token before spawning the child; the flag clears the rest of the worker
+runtime environment while the narrow runner sudoers rule preserves BWS project secrets.
 
 ## Context
 

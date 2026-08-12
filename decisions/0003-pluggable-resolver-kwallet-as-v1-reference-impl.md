@@ -1,6 +1,8 @@
 # ADR-0003: Pluggable `Resolver`/`Approver` interfaces, KWallet/kdialog as v1's reference impl
 
-**Status:** Accepted — the interface-pluggability decision below still stands and is exactly what
+**Status:** Superseded for deployment by [ADR-0010](0010-isolated-worker-and-runner-uids.md). The
+interfaces remain, but the isolated worker rejects desktop adapters. The pluggability decision
+below still stands and is exactly what
 made [ADR-0006](0006-secret-service-over-kwallet-query-cli.md) a same-day adapter swap instead of
 a rewrite. The specific claim that `KWalletResolver` wraps `kwallet-query` is superseded by
 ADR-0006 — see there for why.
