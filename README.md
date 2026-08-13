@@ -141,6 +141,10 @@ session.
    callers itself. See [ADR-0008](decisions/0008-tailscale-relay-approver-design.md) and
    [ADR-0009](decisions/0009-two-port-relay-protocol.md).
 
+   Keep the decision port's root page open on the approving device. It refreshes every two seconds,
+   shows live pending requests, and submits approvals or denials through the existing decision
+   endpoint. The broker host cannot reach this page when the documented ACL split is applied.
+
 ## Use
 
 ```bash

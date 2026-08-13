@@ -32,7 +32,8 @@ approval latency inherently bounded by human response time, not machine speed �
   to poll. Meant to be reachable by the broker host's tailnet identity only.
 - A **decision port** (`NewDecisionHandler`) — `POST /requests/{id}/decide` with
   `{"decision": "approve"|"deny"}`. Meant to be reachable by the approving device's tailnet
-  identity only.
+  identity only. Its bookmarkable `GET /` dashboard refreshes every two seconds and shows all live
+  pending requests, so the operator does not need an out-of-band request ID.
 
 Neither handler checks *who* is calling — that's deliberate. The split exists purely so a Tailscale
 ACL policy can restrict each port to a different peer, with zero application code involved in the
@@ -75,6 +76,10 @@ ticker, kept out of the store's own concerns.
   `internal/approval` (`HTTPRelayClient` against a real handler via `httptest`, `TailscaleApprover`
   against a `FakeRelayClient`) — none of it needs a real network or a real Tailscale setup to run in
   CI.
+- The decision dashboard makes the approval flow discoverable without relay log access or a push
+  notification service. It lists only live pending requests and reuses the existing same-origin
+  decision forms. Approval pages use a `same-origin` referrer policy so standards-compliant
+  browsers retain a verifiable `Origin` on form POSTs without sending a referrer cross-origin.
 - A real (non-fake) smoke test proved the actual wire protocol end to end on localhost: register,
   poll pending, decide, poll reflects the decision, a second decide correctly rejected with 409.
 - **Real Tailscale ACL enforcement confirmed.** Verified end to end on a live tailnet: a personal
