@@ -60,8 +60,9 @@ The integration runner path also requires the isolated worker and runner sudoers
 - `BWS_ACCESS_TOKEN` belongs only in the worker-to-`bws` environment. `bws` removes it before
   spawning its child. Keep `--no-inherit-env` as well so the rest of the worker's runtime
   environment does not cross into the runner-side sudo hop.
-- The runner-side sudo uses `SETENV` because BWS secret names are dynamic. It may target only the
-  dedicated `secrets-broker-runner` account. Do not widen that runas scope.
+- The runner-side sudo preserves the already-cleared `bws --no-inherit-env` environment through a
+  worker-scoped `env_keep` rule. Its command is `NOSETENV` and may target only the dedicated
+  `secrets-broker-runner` account. Do not widen that account or environment scope.
 - BWS secret names are trusted deployment data. Reject or rename control-variable keys such as
   `LD_PRELOAD`, `BASH_ENV`, and `PATH` before using a project with this broker.
 - Policy and executable paths are administrator-owned. Sensitive file reads must keep the

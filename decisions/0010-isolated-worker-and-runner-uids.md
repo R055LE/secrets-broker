@@ -33,8 +33,10 @@ Use three Linux identities:
    root-owned `bws` binary with a trusted environment.
 3. The approved command runs as `secrets-broker-runner`. `bws` removes its bootstrap token before
    spawning the runner-side sudo hop, and `--no-inherit-env` clears the rest of the worker runtime
-   environment. A narrowly scoped `SETENV` rule lets the BWS project secrets cross that hop. The
-   runner cannot read the worker-owned token or audit directory.
+   environment. A worker-scoped `env_keep` rule lets that already-cleared BWS environment cross
+   the hop on both sudo-rs and classic sudo. The command rule is `NOSETENV`, so the worker cannot
+   add command-line environment assignments. The runner cannot read the worker-owned token or
+   audit directory.
 
 The worker accepts only the file token backend and Tailscale relay approval. Caller-controlled
 config, audit, executable, desktop session, keyring, and environment-token selection are rejected.
@@ -62,9 +64,9 @@ state, validates IDs and listen addresses, sets server timeouts, and hardens the
   executables and policy, and carefully provisioned file permissions.
 - Commands execute as `secrets-broker-runner`, not as the invoking user. Project permissions and
   tool configuration must account for that identity.
-- The nested sudo hop must preserve arbitrary BWS project secret names, so the worker account has
-  `SETENV` permission when running commands only as the dedicated runner account. Compromise of
-  the worker already exposes the bootstrap token; this rule does not grant it a broader identity.
+- The nested sudo hop must preserve arbitrary BWS project secret names. Its `env_keep = "*"` scope
+  is limited to the worker account, after `bws --no-inherit-env` has removed the worker runtime
+  environment and bootstrap token. The command itself is tagged `NOSETENV`.
 - BWS injects environment variables before starting its command shell. Secret names are trusted
   deployment data and must not be control variables such as `LD_PRELOAD`, `BASH_ENV`, or `PATH`.
 - Exact argv and cwd do not authenticate agent-writable hooks, plugins, providers, scripts, or
