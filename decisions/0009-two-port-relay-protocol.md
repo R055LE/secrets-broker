@@ -1,7 +1,7 @@
 # ADR-0009: Two listening ports, one request lifecycle, no application-level auth
 
-**Status:** Implemented and verified. Real Tailscale ACL enforcement confirmed against a live
-tailnet on 2026-08-01 — see Consequences.
+**Status:** Implemented and verified. Live Tailscale ACL enforcement was confirmed on 2026-08-01;
+separate-host dashboard approval was confirmed on 2026-08-12. See Consequences.
 **Date:** 2026-08-01
 **Deciders:** Ross
 
@@ -93,8 +93,15 @@ ticker, kept out of the store's own concerns.
   to reach port 7621 at all — nothing to do with this project's code, but a reminder that "the
   protocol is correct" and "the network actually lets the right traffic through" are separate
   things to check.
+- A later deployment pass moved the relay to its intended separate host. The broker reached only
+  the control port, while the operator opened the decision dashboard from an authorized device and
+  approved a live request without a request-ID handoff or relay log access. The broker observed the
+  decision and completed a no-output BWS injection check.
 
 **Negative — what's still unverified**
+- This development deployment does not yet make the relay independent of the agent. Administrative
+  access used to deploy the relay must be removed, or approvals must become cryptographically
+  verifiable, before treating the relay as an agent-resistant human boundary.
 - No TLS between broker/approver and relay — traffic is plaintext HTTP. Acceptable because the
   tailnet itself is already an encrypted WireGuard tunnel; adding HTTPS on top would be defense in
   depth, not a closed gap, and isn't built for v1.

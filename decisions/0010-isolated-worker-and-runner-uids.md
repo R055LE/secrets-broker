@@ -1,6 +1,6 @@
 # ADR-0010: Isolate the worker and wrapped command under separate UIDs
 
-**Status:** Implemented
+**Status:** Implemented and live verified
 **Date:** 2026-08-12
 **Deciders:** Ross
 
@@ -55,6 +55,9 @@ state, validates IDs and listen addresses, sets server timeouts, and hardens the
   adapter overrides.
 - A wrapped command cannot read the bootstrap token or alter the audit log, even if its normal
   behavior is influenced by agent-controlled files.
+- A live approval-gated, no-output check confirmed that a BWS-injected project variable survived
+  the worker-to-runner identity change on sudo-rs. The check tested only that the value was
+  non-empty and emitted neither its name nor its value.
 - The deployment stays ephemeral and CLI-driven. There is no daemon lifecycle, socket ownership,
   or application authentication protocol to operate.
 
