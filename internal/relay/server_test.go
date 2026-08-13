@@ -205,6 +205,74 @@ func TestDecisionHandler_InvalidDecisionValueRejected(t *testing.T) {
 	}
 }
 
+func TestDecisionHandler_IndexRefreshesWhenNoRequestsArePending(t *testing.T) {
+	store := relay.NewStore()
+	decision := relay.NewDecisionHandler(store)
+
+	rec := getJSON(t, decision, "/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "No pending approval requests.") {
+		t.Fatalf("empty dashboard missing its status: %s", body)
+	}
+	if !strings.Contains(body, `http-equiv="refresh" content="2"`) {
+		t.Fatalf("dashboard missing its two-second refresh: %s", body)
+	}
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("dashboard must not be cached, got %q", rec.Header().Get("Cache-Control"))
+	}
+}
+
+func TestDecisionHandler_IndexShowsPendingRequestsAndButtons(t *testing.T) {
+	store := relay.NewStore()
+	control := relay.NewControlHandler(store, time.Minute)
+	decision := relay.NewDecisionHandler(store)
+
+	postJSON(t, control, "/requests/req-1", map[string]string{"prompt": "run git push?"})
+	postJSON(t, control, "/requests/req-2", map[string]string{"prompt": `<script>alert(1)</script>`})
+
+	rec := getJSON(t, decision, "/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"run git push?",
+		"&lt;script&gt;alert(1)&lt;/script&gt;",
+		`action="/requests/req-1/decide"`,
+		`action="/requests/req-2/decide"`,
+		`value="approve"`,
+		`value="deny"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "<script>") {
+		t.Fatalf("dashboard rendered an unescaped prompt: %s", body)
+	}
+}
+
+func TestDecisionHandler_IndexHidesDecidedAndExpiredRequests(t *testing.T) {
+	store := relay.NewStore()
+	_ = store.Create("pending", "pending prompt", time.Minute)
+	_ = store.Create("decided", "decided prompt", time.Minute)
+	_ = store.Create("expired", "expired prompt", -time.Second)
+	_ = store.Decide("decided", false)
+	decision := relay.NewDecisionHandler(store)
+
+	rec := getJSON(t, decision, "/")
+	body := rec.Body.String()
+	if !strings.Contains(body, "pending prompt") {
+		t.Fatalf("dashboard missing live request: %s", body)
+	}
+	if strings.Contains(body, "decided prompt") || strings.Contains(body, "expired prompt") {
+		t.Fatalf("dashboard included a closed request: %s", body)
+	}
+}
+
 func TestDecisionHandler_ApprovalPageShowsPromptAndButtons(t *testing.T) {
 	store := relay.NewStore()
 	control := relay.NewControlHandler(store, time.Minute)
@@ -231,6 +299,9 @@ func TestDecisionHandler_ApprovalPageShowsPromptAndButtons(t *testing.T) {
 	}
 	if rec.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("approval page must not be cached, got %q", rec.Header().Get("Cache-Control"))
+	}
+	if rec.Header().Get("Referrer-Policy") != "same-origin" {
+		t.Fatalf("approval page must preserve same-origin form attribution, got %q", rec.Header().Get("Referrer-Policy"))
 	}
 }
 
@@ -371,6 +442,44 @@ func TestDecisionHandler_SameOriginFormAccepted(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got status %d, want 200 for a same-origin form POST: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDecisionHandler_NullOriginRejected(t *testing.T) {
+	store := relay.NewStore()
+	control := relay.NewControlHandler(store, time.Minute)
+	decision := relay.NewDecisionHandler(store)
+
+	postJSON(t, control, "/requests/req-1", map[string]string{"prompt": "prompt"})
+
+	req := httptest.NewRequest(http.MethodPost, "/requests/req-1/decide", strings.NewReader("decision=approve"))
+	req.Host = "relay.example"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "null")
+	rec := httptest.NewRecorder()
+	decision.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("got status %d, want 403 for an opaque origin", rec.Code)
+	}
+}
+
+func TestDecisionHandler_MismatchedSchemeRejected(t *testing.T) {
+	store := relay.NewStore()
+	control := relay.NewControlHandler(store, time.Minute)
+	decision := relay.NewDecisionHandler(store)
+
+	postJSON(t, control, "/requests/req-1", map[string]string{"prompt": "prompt"})
+
+	req := httptest.NewRequest(http.MethodPost, "/requests/req-1/decide", strings.NewReader("decision=approve"))
+	req.Host = "relay.example"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://relay.example")
+	rec := httptest.NewRecorder()
+	decision.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("got status %d, want 403 for a mismatched origin scheme", rec.Code)
 	}
 }
 

@@ -8,6 +8,7 @@ package relay
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -97,6 +98,28 @@ func (s *Store) Get(id string) (Request, error) {
 		out.Status = StatusExpired
 	}
 	return out, nil
+}
+
+// Pending returns a deadline-ordered snapshot of requests that can still
+// be decided. Returning copies keeps callers from mutating store state.
+func (s *Store) Pending() []Request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	pending := make([]Request, 0, len(s.requests))
+	for _, req := range s.requests {
+		if req.Status == StatusPending && !now.After(req.Deadline) {
+			pending = append(pending, *req)
+		}
+	}
+	sort.Slice(pending, func(i, j int) bool {
+		if pending[i].Deadline.Equal(pending[j].Deadline) {
+			return pending[i].ID < pending[j].ID
+		}
+		return pending[i].Deadline.Before(pending[j].Deadline)
+	})
+	return pending
 }
 
 // Decide records a decision for id. Only the first decision to arrive

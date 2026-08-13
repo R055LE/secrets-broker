@@ -86,9 +86,14 @@ type decideRequestBody struct {
 // /requests/{id}/decide accepts either that page's plain HTML form
 // submission or a JSON body ({"decision":"approve"|"deny"}) for scripted
 // use, so both a phone tapping a button and a script curling the endpoint
-// work against the same route.
+// work against the same route. GET / is a bookmarkable dashboard that
+// refreshes every two seconds and shows every live pending request.
 func NewDecisionHandler(store *Store) http.Handler {
 	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
+		writePendingPage(w, store.Pending())
+	})
 
 	mux.HandleFunc("GET /requests/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -211,7 +216,11 @@ func sameOrigin(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	return u.Host == r.Host
+	expectedScheme := "http"
+	if r.TLS != nil {
+		expectedScheme = "https"
+	}
+	return u.Scheme == expectedScheme && u.Host == r.Host
 }
 
 // writeApprovalPage renders the tap-to-approve page. Deliberately no CSS
@@ -221,12 +230,7 @@ func sameOrigin(r *http.Request) bool {
 // three states (pending-with-buttons, already-decided, or a
 // just-submitted confirmation) to show.
 func writeApprovalPage(w http.ResponseWriter, id, prompt, status string, showButtons bool) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("X-Frame-Options", "DENY")
+	setHTMLHeaders(w)
 
 	var body string
 	switch {
@@ -251,6 +255,47 @@ func writeApprovalPage(w http.ResponseWriter, id, prompt, status string, showBut
 	}
 
 	_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>secrets-broker</title></head><body style="font-family:sans-serif;max-width:32em;margin:2em auto;padding:0 1em;">%s</body></html>`, body)
+}
+
+func writePendingPage(w http.ResponseWriter, pending []Request) {
+	setHTMLHeaders(w)
+
+	var body strings.Builder
+	body.WriteString("<h1>Pending approvals</h1>")
+	if len(pending) == 0 {
+		body.WriteString("<p>No pending approval requests.</p>")
+	} else {
+		for _, req := range pending {
+			id := html.EscapeString(req.ID)
+			_, _ = fmt.Fprintf(&body, `<section style="border:1px solid #999;padding:1em;margin:1em 0;">
+				<pre style="white-space:pre-wrap;overflow-wrap:anywhere;">%s</pre>
+				<form method="POST" action="/requests/%s/decide" style="display:inline">
+					<input type="hidden" name="decision" value="approve">
+					<button type="submit" style="font-size:1.25em;padding:0.5em 1em;">Approve</button>
+				</form>
+				<form method="POST" action="/requests/%s/decide" style="display:inline">
+					<input type="hidden" name="decision" value="deny">
+					<button type="submit" style="font-size:1.25em;padding:0.5em 1em;">Deny</button>
+				</form>
+			</section>`, html.EscapeString(req.Prompt), id, id)
+		}
+	}
+	body.WriteString("<p>This page refreshes every two seconds.</p>")
+
+	_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="2"><title>secrets-broker approvals</title></head><body style="font-family:sans-serif;max-width:40em;margin:2em auto;padding:0 1em;">%s</body></html>`, body.String())
+}
+
+func setHTMLHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+	// Fetch serializes Origin as "null" for form POSTs under a
+	// no-referrer policy, making the same-origin check impossible. This
+	// policy preserves the origin for our forms without sending a Referer
+	// to another origin.
+	w.Header().Set("Referrer-Policy", "same-origin")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
 }
 
 func validID(id string) bool {

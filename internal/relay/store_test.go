@@ -119,6 +119,29 @@ func TestStore_GetAfterDeadlineReportsExpired(t *testing.T) {
 	}
 }
 
+func TestStore_PendingReturnsOnlyLivePendingRequestsByDeadline(t *testing.T) {
+	s := relay.NewStore()
+	_ = s.Create("later", "later prompt", time.Hour)
+	_ = s.Create("expired", "expired prompt", -time.Second)
+	_ = s.Create("earlier", "earlier prompt", time.Minute)
+	_ = s.Create("decided", "decided prompt", time.Hour)
+	_ = s.Decide("decided", true)
+
+	pending := s.Pending()
+	if len(pending) != 2 {
+		t.Fatalf("got %d pending requests, want 2", len(pending))
+	}
+	if pending[0].ID != "earlier" || pending[1].ID != "later" {
+		t.Fatalf("got pending order %q, %q; want earlier, later", pending[0].ID, pending[1].ID)
+	}
+
+	pending[0].Prompt = "mutated"
+	req, _ := s.Get("earlier")
+	if req.Prompt != "earlier prompt" {
+		t.Fatalf("mutating a Pending snapshot changed the store: %q", req.Prompt)
+	}
+}
+
 func TestStore_DecideAfterDeadlineFails(t *testing.T) {
 	s := relay.NewStore()
 	_ = s.Create("req-1", "prompt", -time.Second) // already past deadline
@@ -162,6 +185,7 @@ func TestStore_ConcurrentAccess(t *testing.T) {
 			id := "req-" + string(rune('a'+n%26)) + string(rune('0'+n/26))
 			_ = s.Create(id, "prompt", time.Minute)
 			_, _ = s.Get(id)
+			_ = s.Pending()
 			_ = s.Decide(id, n%2 == 0)
 		}(i)
 	}
