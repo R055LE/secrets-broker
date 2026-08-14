@@ -67,21 +67,46 @@ jobs:
         with:
           go-version: '1.26.6'
 
-      - name: Build deployment binaries
+      - name: Build release bundles
+        env:
+          VERSION: v0.0.0-ci
+        run: scripts/package-release.sh "$VERSION"
+
+      - name: Verify release bundle contents
+        env:
+          VERSION: v0.0.0-ci
         run: |
-          go build -ldflags="-s -w" -o bin/secrets-broker ./cmd/secrets-broker
-          go build -ldflags="-s -w" -o bin/secrets-broker-worker ./cmd/secrets-broker-worker
-          go build -ldflags="-s -w" -o bin/secrets-broker-relay ./cmd/secrets-broker-relay
+          (cd dist && sha256sum --check checksums.txt)
+          for arch in amd64 arm64; do
+            bundle="secrets-broker-$VERSION-linux-$arch"
+            archive="dist/$bundle.tar.gz"
+            for path in \
+              bin/secrets-broker \
+              bin/secrets-broker-worker \
+              bin/secrets-broker-relay \
+              deploy/install-worker.sh \
+              deploy/install-relay.sh \
+              deploy/secrets-broker.sudoers \
+              deploy/secrets-broker-relay.service \
+              deploy/secrets-broker-relay.env.example \
+              policy.example.toml \
+              README.md \
+              LICENSE; do
+              tar -tzf "$archive" "$bundle/$path" >/dev/null
+            done
+          done
 
       - name: Check installer syntax
         run: |
-          bash -n deploy/install-worker.sh deploy/install-relay.sh
-          shellcheck deploy/install-worker.sh deploy/install-relay.sh
+          bash -n scripts/package-release.sh deploy/install-worker.sh deploy/install-relay.sh
+          shellcheck scripts/package-release.sh deploy/install-worker.sh deploy/install-relay.sh
 
       - name: Install and check worker boundary
         run: |
           test_dir="$(mktemp -d)"
           trap 'rm -rf "$test_dir"' EXIT
+          tar -xzf dist/secrets-broker-v0.0.0-ci-linux-amd64.tar.gz -C "$test_dir"
+          release_root="$test_dir/secrets-broker-v0.0.0-ci-linux-amd64"
 
           printf '%s\n' '#!/bin/sh' 'test "$1" = --version && { echo "bws 0.0.0-ci"; exit 0; }' 'exit 1' > "$test_dir/bws"
           chmod 0755 "$test_dir/bws"
@@ -91,45 +116,48 @@ jobs:
             -e 's#/home/YOUR-USER/code/YOUR-PROJECT#/home/runner#' \
             policy.example.toml > "$test_dir/policy.toml"
 
-          sudo deploy/install-worker.sh install \
+          sudo "$release_root/deploy/install-worker.sh" install \
             --client-user runner \
             --bws "$test_dir/bws" \
             --policy "$test_dir/policy.toml"
           sudo -u secrets-broker /bin/sh -c \
             'umask 077; printf %s ci-only-placeholder > /var/lib/secrets-broker/bws-access-token'
-          sudo deploy/install-worker.sh check --client-user runner
+          sudo "$release_root/deploy/install-worker.sh" check --client-user runner
 
           sudo /bin/sh -c 'printf "\n# preserved by installer test\n" >> /etc/secrets-broker/policy.toml'
           policy_before="$(sudo sha256sum /etc/secrets-broker/policy.toml)"
           token_before="$(sudo sha256sum /var/lib/secrets-broker/bws-access-token)"
-          sudo deploy/install-worker.sh install \
+          sudo "$release_root/deploy/install-worker.sh" install \
             --client-user runner \
             --policy "$test_dir/policy.toml"
           test "$policy_before" = "$(sudo sha256sum /etc/secrets-broker/policy.toml)"
           test "$token_before" = "$(sudo sha256sum /var/lib/secrets-broker/bws-access-token)"
-          sudo deploy/install-worker.sh check --client-user runner
+          sudo "$release_root/deploy/install-worker.sh" check --client-user runner
 
       - name: Install and check relay service
         run: |
           test_dir="$(mktemp -d)"
           trap 'rm -rf "$test_dir"' EXIT
+          tar -xzf dist/secrets-broker-v0.0.0-ci-linux-amd64.tar.gz -C "$test_dir"
+          release_root="$test_dir/secrets-broker-v0.0.0-ci-linux-amd64"
           printf '%s\n' \
             'CONTROL_ADDR=100.100.100.100:7620' \
             'DECISION_ADDR=100.100.100.100:7621' > "$test_dir/relay.env"
           sudo ip address add 100.100.100.100/32 dev lo
 
-          if sudo deploy/install-relay.sh install --environment deploy/secrets-broker-relay.env.example; then
+          if sudo "$release_root/deploy/install-relay.sh" install \
+            --environment "$release_root/deploy/secrets-broker-relay.env.example"; then
             echo 'placeholder relay environment was accepted' >&2
             exit 1
           fi
-          sudo deploy/install-relay.sh install --environment "$test_dir/relay.env"
-          sudo deploy/install-relay.sh check
+          sudo "$release_root/deploy/install-relay.sh" install --environment "$test_dir/relay.env"
+          sudo "$release_root/deploy/install-relay.sh" check
 
           sudo /bin/sh -c 'printf "\n# preserved by installer test\n" >> /etc/secrets-broker-relay/environment'
           environment_before="$(sudo sha256sum /etc/secrets-broker-relay/environment)"
-          sudo deploy/install-relay.sh install --environment "$test_dir/relay.env"
+          sudo "$release_root/deploy/install-relay.sh" install --environment "$test_dir/relay.env"
           test "$environment_before" = "$(sudo sha256sum /etc/secrets-broker-relay/environment)"
-          sudo deploy/install-relay.sh check
+          sudo "$release_root/deploy/install-relay.sh" check
 
   release:
     needs: [build, installer-test]
@@ -144,26 +172,15 @@ jobs:
         with:
           go-version: '1.26.6'
 
-      - name: Cross-compile
-        # linux/amd64 + linux/arm64 only. The worker boundary depends on Linux
-        # users, sudoers, procfs ownership, and no-follow file opens.
-        # VERSION comes from env, not interpolated into the script string,
-        # so a tag name can't inject shell commands here.
+      - name: Package release bundles
         env:
           VERSION: ${{ github.ref_name }}
-        run: |
-          mkdir -p dist
-          for arch in amd64 arm64; do
-            GOOS=linux GOARCH=$arch go build -ldflags="-s -w -X github.com/R055LE/secrets-broker/internal/cli.Version=$VERSION" \
-              -o dist/secrets-broker-linux-$arch ./cmd/secrets-broker
-            GOOS=linux GOARCH=$arch go build -ldflags="-s -w" \
-              -o dist/secrets-broker-worker-linux-$arch ./cmd/secrets-broker-worker
-            GOOS=linux GOARCH=$arch go build -ldflags="-s -w" \
-              -o dist/secrets-broker-relay-linux-$arch ./cmd/secrets-broker-relay
-          done
-          (cd dist && sha256sum secrets-broker-linux-* secrets-broker-worker-linux-* secrets-broker-relay-linux-* > checksums.txt)
+        run: scripts/package-release.sh "$VERSION"
 
       - name: Upload release assets
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          files: dist/*
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt

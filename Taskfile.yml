@@ -54,9 +54,9 @@ tasks:
       - go vet ./...
 
   check:installers:
-    desc: Check deployment script syntax
+    desc: Check release and deployment script syntax
     cmds:
-      - bash -n deploy/install-worker.sh deploy/install-relay.sh
+      - bash -n scripts/package-release.sh deploy/install-worker.sh deploy/install-relay.sh
 
   fmt:
     desc: Format all Go files
