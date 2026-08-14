@@ -18,7 +18,7 @@ jobs:
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
 
       - name: Vet
         run: go vet ./...
@@ -44,7 +44,7 @@ jobs:
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
 
       - name: Build
         run: |
@@ -57,8 +57,82 @@ jobs:
           name: secrets-broker-linux-amd64
           path: bin/
 
+  installer-test:
+    needs: lint-and-test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.26.6'
+
+      - name: Build deployment binaries
+        run: |
+          go build -ldflags="-s -w" -o bin/secrets-broker ./cmd/secrets-broker
+          go build -ldflags="-s -w" -o bin/secrets-broker-worker ./cmd/secrets-broker-worker
+          go build -ldflags="-s -w" -o bin/secrets-broker-relay ./cmd/secrets-broker-relay
+
+      - name: Check installer syntax
+        run: |
+          bash -n deploy/install-worker.sh deploy/install-relay.sh
+          shellcheck deploy/install-worker.sh deploy/install-relay.sh
+
+      - name: Install and check worker boundary
+        run: |
+          test_dir="$(mktemp -d)"
+          trap 'rm -rf "$test_dir"' EXIT
+
+          printf '%s\n' '#!/bin/sh' 'test "$1" = --version && { echo "bws 0.0.0-ci"; exit 0; }' 'exit 1' > "$test_dir/bws"
+          chmod 0755 "$test_dir/bws"
+          sed \
+            -e 's#http://PASTE-RELAY-TAILSCALE-IP-HERE:7620#http://100.100.100.100:7620#' \
+            -e 's#PASTE-YOUR-BWS-SECRETS-MANAGER-PROJECT-UUID-HERE#00000000-0000-0000-0000-000000000000#' \
+            -e 's#/home/YOUR-USER/code/YOUR-PROJECT#/home/runner#' \
+            policy.example.toml > "$test_dir/policy.toml"
+
+          sudo deploy/install-worker.sh install \
+            --client-user runner \
+            --bws "$test_dir/bws" \
+            --policy "$test_dir/policy.toml"
+          sudo -u secrets-broker /bin/sh -c \
+            'umask 077; printf %s ci-only-placeholder > /var/lib/secrets-broker/bws-access-token'
+          sudo deploy/install-worker.sh check --client-user runner
+
+          sudo /bin/sh -c 'printf "\n# preserved by installer test\n" >> /etc/secrets-broker/policy.toml'
+          policy_before="$(sudo sha256sum /etc/secrets-broker/policy.toml)"
+          token_before="$(sudo sha256sum /var/lib/secrets-broker/bws-access-token)"
+          sudo deploy/install-worker.sh install \
+            --client-user runner \
+            --policy "$test_dir/policy.toml"
+          test "$policy_before" = "$(sudo sha256sum /etc/secrets-broker/policy.toml)"
+          test "$token_before" = "$(sudo sha256sum /var/lib/secrets-broker/bws-access-token)"
+          sudo deploy/install-worker.sh check --client-user runner
+
+      - name: Install and check relay service
+        run: |
+          test_dir="$(mktemp -d)"
+          trap 'rm -rf "$test_dir"' EXIT
+          printf '%s\n' \
+            'CONTROL_ADDR=100.100.100.100:7620' \
+            'DECISION_ADDR=100.100.100.100:7621' > "$test_dir/relay.env"
+          sudo ip address add 100.100.100.100/32 dev lo
+
+          if sudo deploy/install-relay.sh install --environment deploy/secrets-broker-relay.env.example; then
+            echo 'placeholder relay environment was accepted' >&2
+            exit 1
+          fi
+          sudo deploy/install-relay.sh install --environment "$test_dir/relay.env"
+          sudo deploy/install-relay.sh check
+
+          sudo /bin/sh -c 'printf "\n# preserved by installer test\n" >> /etc/secrets-broker-relay/environment'
+          environment_before="$(sudo sha256sum /etc/secrets-broker-relay/environment)"
+          sudo deploy/install-relay.sh install --environment "$test_dir/relay.env"
+          test "$environment_before" = "$(sudo sha256sum /etc/secrets-broker-relay/environment)"
+          sudo deploy/install-relay.sh check
+
   release:
-    needs: build
+    needs: [build, installer-test]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -68,7 +142,7 @@ jobs:
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
 
       - name: Cross-compile
         # linux/amd64 + linux/arm64 only. The worker boundary depends on Linux

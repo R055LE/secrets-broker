@@ -30,7 +30,7 @@ a second runner UID. Read `decisions/`, especially ADR-0010, before changing a s
 - `internal/config/`: TOML parsing plus stricter worker deployment validation.
 - `internal/execx/`: shared process-execution seam for unit tests.
 - `internal/relay/`: bounded in-memory request store and two HTTP handlers.
-- `deploy/`: root-installed sudoers policy.
+- `deploy/`: idempotent role installers and root-installed deployment policy.
 - `decisions/`: ADRs containing verified behavior and trust-boundary decisions.
 
 ## Build order
@@ -40,6 +40,7 @@ task test
 task test:integration  # Real Bitwarden tests; skips unless the documented env vars are set
 task vet
 task lint
+task check:installers
 task build
 task build:worker
 task build:relay
@@ -49,7 +50,7 @@ The integration runner path also requires the isolated worker and runner sudoers
 
 ## Key constraints
 
-- Go 1.26.5, cobra, and `github.com/pelletier/go-toml/v2`. Avoid new dependencies unless the
+- Go 1.26.6, cobra, and `github.com/pelletier/go-toml/v2`. Avoid new dependencies unless the
   requested change needs one.
 - The caller controls only project alias, resolved cwd, exact argv, and dry-run. Do not add config,
   audit, token, worker path, executable path, or approval override flags.

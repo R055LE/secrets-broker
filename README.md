@@ -50,12 +50,13 @@ There are two deliberate limits:
 
 ## Build
 
-Requires Go 1.26.5 and [Task](https://taskfile.dev/).
+Requires Go 1.26.6 and [Task](https://taskfile.dev/).
 
 ```bash
 task test
 task vet
 task lint
+task check:installers
 task build
 task build:worker
 task build:relay
@@ -63,87 +64,77 @@ task build:relay
 
 The local lint task expects `golangci-lint` on `PATH`. CI pins its own version.
 
-## Install the isolated worker
+## Install
 
-These are administrator steps. Run token provisioning from a trusted terminal outside the agent
-session.
+The deployment scripts target Linux with systemd, sudo or sudo-rs, standard account tools, and
+POSIX ACL tools (`setfacl` and `getfacl`). Build all three binaries first:
 
-1. Create the two service accounts and the client group:
+```bash
+task build
+task build:worker
+task build:relay
+```
 
-   ```bash
-   sudo useradd --system --create-home --home-dir /var/lib/secrets-broker \
-     --shell /usr/sbin/nologin secrets-broker
-   sudo useradd --system --create-home --home-dir /var/lib/secrets-broker-runner \
-     --shell /usr/sbin/nologin secrets-broker-runner
-   sudo chmod 0700 /var/lib/secrets-broker /var/lib/secrets-broker-runner
-   sudo groupadd --system secrets-broker-clients
-   sudo usermod -aG secrets-broker-clients "$USER"
-   ```
+Run the worker installer on the broker host. Give it the local human account that will invoke the
+CLI and a trusted Bitwarden `bws` binary on the first install:
 
-2. Install root-owned executables. Install the Bitwarden `bws` binary at the exact path named in
-   policy.
+```bash
+sudo deploy/install-worker.sh install --client-user "$USER" --bws /path/to/bws
+```
 
-   ```bash
-   install -Dm0755 bin/secrets-broker "$HOME/.local/bin/secrets-broker"
-   sudo install -Dm0755 bin/secrets-broker-worker /usr/local/libexec/secrets-broker-worker
-   sudo install -Dm0755 /path/to/bws /usr/local/bin/bws
-   ```
+The installer creates the worker, runner, and client identities; installs root-owned binaries and
+sudoers policy; establishes private state and audit directories; and grants both service accounts
+traverse-only access to the client's home directory. It never creates or replaces the token and
+never replaces an existing policy.
 
-3. Install policy, audit storage, and sudoers rules:
+Edit `/etc/secrets-broker/policy.toml` as root. The configured working directory must be
+traversable by `secrets-broker` and usable by `secrets-broker-runner`. Grant traverse access on any
+additional private parent directories with `setfacl`. Log out and back in after the first install
+so the client-group membership reaches the login session.
 
-   ```bash
-   sudo install -d -o root -g root -m 0755 /etc/secrets-broker
-   sudo install -o root -g secrets-broker -m 0640 policy.example.toml \
-     /etc/secrets-broker/policy.toml
-   sudo install -d -o secrets-broker -g secrets-broker -m 0700 /var/log/secrets-broker
-   sudo install -o root -g root -m 0440 deploy/secrets-broker.sudoers \
-     /etc/sudoers.d/secrets-broker
-   sudo visudo -cf /etc/sudoers.d/secrets-broker
-   ```
+Provision the BWS access token from a trusted terminal outside the agent session. The token must
+not be typed into an agent prompt, command argument, environment file, or shell history:
 
-   Edit `/etc/secrets-broker/policy.toml` as root. The configured working directory must be
-   traversable by `secrets-broker` and usable by `secrets-broker-runner`. Log out and back in after
-   changing client-group membership.
+```bash
+sudo -u secrets-broker /bin/bash -c \
+  'umask 077; read -rsp "BWS access token: " token; printf "\n" >&2; printf %s "$token" > /var/lib/secrets-broker/bws-access-token'
+```
 
-   If the working directory is below a private home directory, grant the service accounts traverse
-   permission on the home directory without adding them to the user's group:
+Run the read-only deployment check after policy and token provisioning:
 
-   ```bash
-   sudo setfacl -m u:secrets-broker:--x,u:secrets-broker-runner:--x "$HOME"
-   ```
+```bash
+sudo deploy/install-worker.sh check --client-user "$USER"
+```
 
-4. Provision the BWS access token as the worker account. The token must not be typed into an agent
-   prompt, command argument, environment file, or shell history.
+The check validates accounts, group membership, ACLs, fixed paths, ownership, modes, sudoers
+syntax, template completion, and installed CLI, `bws`, and sudo versions. It inspects only the
+token file's metadata and size. It does not read or print the token, invoke the worker, request an
+approval, or write an audit record.
 
-   ```bash
-   sudo -u secrets-broker /bin/bash -c \
-     'umask 077; read -rsp "BWS access token: " token; printf "\n" >&2; printf %s "$token" > /var/lib/secrets-broker/bws-access-token'
-   ```
+Install the relay on a separate Tailscale device. Start from the example and replace both values
+with that device's literal Tailscale IPv4 address:
 
-5. Install the relay on a separate device, then configure its Tailscale IP in policy. The relay
-   has a broker-only control port and an approver-only decision port. A hardened systemd unit and
-   environment-file example are in `deploy/`:
+```bash
+install -m 0600 deploy/secrets-broker-relay.env.example "$HOME/secrets-broker-relay.env"
+${EDITOR:-vi} "$HOME/secrets-broker-relay.env"
+sudo deploy/install-relay.sh install --environment "$HOME/secrets-broker-relay.env"
+sudo deploy/install-relay.sh check
+```
 
-   ```bash
-   sudo install -Dm0755 bin/secrets-broker-relay /usr/local/bin/secrets-broker-relay
-   sudo install -d -o root -g root -m 0755 /etc/secrets-broker-relay
-   sudo install -o root -g root -m 0644 deploy/secrets-broker-relay.env.example \
-     /etc/secrets-broker-relay/environment
-   sudoedit /etc/secrets-broker-relay/environment
-   sudo install -o root -g root -m 0644 deploy/secrets-broker-relay.service \
-     /etc/systemd/system/secrets-broker-relay.service
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now secrets-broker-relay.service
-   ```
+The relay installer accepts only the Tailscale IPv4 range, requires ports 7620 and 7621, installs
+and enables the hardened systemd service, and verifies the local decision dashboard. An existing
+`/etc/secrets-broker-relay/environment` is preserved on every rerun. Edit it explicitly as root
+when the relay address changes, then rerun the installer.
 
-   Tailscale ACLs must restrict the control port to the broker host and the decision port to the
-   approving device. The relay rejects wildcard listen addresses, but it does not authenticate
-   callers itself. See [ADR-0008](decisions/0008-tailscale-relay-approver-design.md) and
-   [ADR-0009](decisions/0009-two-port-relay-protocol.md).
+Tailscale ACLs must restrict the control port to the broker host and the decision port to the
+approving device. The relay does not authenticate callers itself. See
+[ADR-0008](decisions/0008-tailscale-relay-approver-design.md),
+[ADR-0009](decisions/0009-two-port-relay-protocol.md), and
+[ADR-0011](decisions/0011-idempotent-role-installers-and-checks.md).
 
-   Keep the decision port's root page open on the approving device. It refreshes every two seconds,
-   shows live pending requests, and submits approvals or denials through the existing decision
-   endpoint. The broker host cannot reach this page when the documented ACL split is applied.
+Keep the decision port's root page open on the approving device. It refreshes every two seconds,
+shows live pending requests, and submits approvals or denials. The broker host cannot reach this
+page when the documented ACL split is applied.
 
 ## Use
 
@@ -180,7 +171,7 @@ internal/relay/            Bounded in-memory store and HTTP handlers
 internal/policy/           Exact argv matching
 internal/config/           TOML parsing and worker-specific validation
 decisions/                 Architecture decision records
-deploy/                    Administrator-owned deployment policy
+deploy/                    Role installers and administrator-owned deployment policy
 ```
 
 Legacy Secret Service, environment-token, and `kdialog` adapters remain for migration and focused
