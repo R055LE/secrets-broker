@@ -50,7 +50,7 @@ There are two deliberate limits:
 
 ## Build
 
-Requires Go 1.26.5 and [Task](https://taskfile.dev/).
+Requires Go 1.26.6 and [Task](https://taskfile.dev/).
 
 ```bash
 task test

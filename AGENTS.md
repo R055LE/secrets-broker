@@ -50,7 +50,7 @@ The integration runner path also requires the isolated worker and runner sudoers
 
 ## Key constraints
 
-- Go 1.26.5, cobra, and `github.com/pelletier/go-toml/v2`. Avoid new dependencies unless the
+- Go 1.26.6, cobra, and `github.com/pelletier/go-toml/v2`. Avoid new dependencies unless the
   requested change needs one.
 - The caller controls only project alias, resolved cwd, exact argv, and dry-run. Do not add config,
   audit, token, worker path, executable path, or approval override flags.
