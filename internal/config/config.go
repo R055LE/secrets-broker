@@ -18,9 +18,10 @@ import (
 // operator who forgets to set this gets "nothing outside the allowlist ever
 // runs," not an unattended prompt that might hang on a headless machine.
 const (
-	ApprovalAlways = "always"
-	ApprovalPrompt = "prompt"
-	ApprovalNever  = "never"
+	ApprovalAlways            = "always"
+	ApprovalPrompt            = "prompt"
+	ApprovalAllowlistedPrompt = "allowlisted-prompt"
+	ApprovalNever             = "never"
 )
 
 // Supported token_source.backend values.
@@ -238,9 +239,9 @@ func (c *Config) validate() error {
 			return fmt.Errorf("project %q: token_entry is required", p.Alias)
 		}
 		switch p.Approval {
-		case ApprovalAlways, ApprovalPrompt, ApprovalNever:
+		case ApprovalAlways, ApprovalPrompt, ApprovalAllowlistedPrompt, ApprovalNever:
 		default:
-			return fmt.Errorf("project %q: approval %q must be one of %q, %q, %q", p.Alias, p.Approval, ApprovalAlways, ApprovalPrompt, ApprovalNever)
+			return fmt.Errorf("project %q: approval %q must be one of %q, %q, %q, %q", p.Alias, p.Approval, ApprovalAlways, ApprovalPrompt, ApprovalAllowlistedPrompt, ApprovalNever)
 		}
 		for _, entry := range p.Allow {
 			if len(entry.Argv) == 0 {

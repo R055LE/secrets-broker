@@ -5,7 +5,7 @@ backend = "secret-service"
 alias          = "claude-code"
 bws_project_id = "00000000-0000-0000-0000-000000000000"
 token_entry    = "claude-code-agent"
-approval       = "prompt"
+approval       = "allowlisted-prompt"
 
   [[projects.allow]]
   argv = ["git", "push"]

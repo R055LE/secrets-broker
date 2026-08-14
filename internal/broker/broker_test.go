@@ -43,6 +43,11 @@ func testConfig() *config.Config {
 				Allow:    []config.AllowEntry{{Argv: []string{"git", "push"}}},
 			},
 			{
+				Alias: "allowlisted-prompt-project", BWSProjectID: "proj-allowlisted-prompt", TokenEntry: "entry-allowlisted-prompt",
+				Approval: config.ApprovalAllowlistedPrompt,
+				Allow:    []config.AllowEntry{{Argv: []string{"git", "push"}}},
+			},
+			{
 				Alias: "cwd-project", BWSProjectID: "proj-cwd", TokenEntry: "entry-cwd",
 				WorkingDir: "/tmp", Approval: config.ApprovalPrompt,
 				Allow: []config.AllowEntry{{Argv: []string{"git", "push"}}},
@@ -206,6 +211,47 @@ func TestRun_ApprovalAlways_PromptsEvenWhenAllowlisted(t *testing.T) {
 	}
 }
 
+func TestRun_AllowlistedPrompt_Approved_Executes(t *testing.T) {
+	h := newHarness(testConfig())
+	h.approver.Decision = approval.Approved
+
+	out := h.broker.Run(context.Background(), broker.RunRequest{Project: "allowlisted-prompt-project", Argv: []string{"git", "push"}})
+
+	if out.Denied {
+		t.Fatalf("expected execution after approval, got denial: %+v", out)
+	}
+	if len(h.approver.Prompts) != 1 {
+		t.Fatal("approval=allowlisted-prompt must prompt for an allowlisted command")
+	}
+}
+
+func TestRun_AllowlistedPrompt_Denied_Denies(t *testing.T) {
+	h := newHarness(testConfig())
+	h.approver.Decision = approval.Denied
+
+	out := h.broker.Run(context.Background(), broker.RunRequest{Project: "allowlisted-prompt-project", Argv: []string{"git", "push"}})
+
+	if !out.Denied || out.Reason != broker.ReasonApprovalRejected {
+		t.Fatalf("got %+v", out)
+	}
+	if len(h.resolver.Calls()) != 0 || len(h.runner.Specs) != 0 {
+		t.Fatal("token resolver and runner must not be touched after an approval rejection")
+	}
+}
+
+func TestRun_AllowlistedPrompt_NotAllowlisted_DeniesWithoutPrompt(t *testing.T) {
+	h := newHarness(testConfig())
+
+	out := h.broker.Run(context.Background(), broker.RunRequest{Project: "allowlisted-prompt-project", Argv: []string{"curl", "https://example.com"}})
+
+	if !out.Denied || out.Reason != broker.ReasonNotAllowlisted {
+		t.Fatalf("got %+v", out)
+	}
+	if len(h.approver.Prompts) != 0 || len(h.resolver.Calls()) != 0 || len(h.runner.Specs) != 0 {
+		t.Fatal("an off-allowlist command must be denied before approval, token resolution, or execution")
+	}
+}
+
 func TestRun_TokenResolutionFails_DeniesBeforeRunner(t *testing.T) {
 	h := newHarness(testConfig())
 	h.resolver.Err = errFakeResolve
@@ -311,18 +357,30 @@ func TestDryRun_UnknownProject(t *testing.T) {
 	}
 }
 
-func TestDryRun_NotAllowlistedPrompt(t *testing.T) {
-	h := newHarness(testConfig())
-	result := h.broker.DryRun("prompt-project", "", []string{"curl", "https://example.com"})
-	if result.Verdict != broker.VerdictPrompt {
-		t.Fatalf("got verdict %v, want VerdictPrompt", result.Verdict)
+func TestDryRun_ApprovalDecisionMatrix(t *testing.T) {
+	tests := []struct {
+		name    string
+		project string
+		argv    []string
+		want    broker.Verdict
+	}{
+		{name: "never allowlisted", project: "never-project", argv: []string{"git", "push"}, want: broker.VerdictAllow},
+		{name: "never unlisted", project: "never-project", argv: []string{"curl"}, want: broker.VerdictDeny},
+		{name: "prompt allowlisted", project: "prompt-project", argv: []string{"git", "push"}, want: broker.VerdictAllow},
+		{name: "prompt unlisted", project: "prompt-project", argv: []string{"curl"}, want: broker.VerdictPrompt},
+		{name: "always allowlisted", project: "always-project", argv: []string{"git", "push"}, want: broker.VerdictPrompt},
+		{name: "always unlisted", project: "always-project", argv: []string{"curl"}, want: broker.VerdictPrompt},
+		{name: "allowlisted-prompt allowlisted", project: "allowlisted-prompt-project", argv: []string{"git", "push"}, want: broker.VerdictPrompt},
+		{name: "allowlisted-prompt unlisted", project: "allowlisted-prompt-project", argv: []string{"curl"}, want: broker.VerdictDeny},
 	}
-}
 
-func TestDryRun_NotAllowlistedNever(t *testing.T) {
 	h := newHarness(testConfig())
-	result := h.broker.DryRun("never-project", "", []string{"curl", "https://example.com"})
-	if result.Verdict != broker.VerdictDeny {
-		t.Fatalf("got verdict %v, want VerdictDeny", result.Verdict)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := h.broker.DryRun(tt.project, "", tt.argv)
+			if result.Verdict != tt.want {
+				t.Fatalf("got verdict %v, want %v", result.Verdict, tt.want)
+			}
+		})
 	}
 }

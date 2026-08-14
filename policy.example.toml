@@ -31,7 +31,11 @@ bws_project_id = "PASTE-YOUR-BWS-SECRETS-MANAGER-PROJECT-UUID-HERE"
 token_entry = "agent-project"
 # Requests from any other resolved working directory are denied.
 working_dir = "/home/YOUR-USER/code/YOUR-PROJECT"
-approval = "never" # "always" | "prompt" | "never"
+# "never": allowlisted commands run; all others are denied.
+# "prompt": allowlisted commands run; all others require approval.
+# "allowlisted-prompt": allowlisted commands require approval; all others are denied.
+# "always": every command requires approval, including commands outside the allowlist.
+approval = "allowlisted-prompt"
 
   [[projects.allow]]
   argv = ["/usr/bin/printenv", "TEST_SECRET_NAME"]

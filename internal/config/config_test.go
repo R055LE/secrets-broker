@@ -27,8 +27,8 @@ func TestLoad_Valid(t *testing.T) {
 	if !ok {
 		t.Fatal("expected project claude-code to be found")
 	}
-	if p.Approval != config.ApprovalPrompt {
-		t.Fatalf("got approval %q, want %q", p.Approval, config.ApprovalPrompt)
+	if p.Approval != config.ApprovalAllowlistedPrompt {
+		t.Fatalf("got approval %q, want %q", p.Approval, config.ApprovalAllowlistedPrompt)
 	}
 	allow := p.AllowArgv()
 	if len(allow) != 2 || allow[0][0] != "git" || allow[0][1] != "push" {
