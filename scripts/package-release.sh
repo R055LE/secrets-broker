@@ -36,7 +36,7 @@ for arch in amd64 arm64; do
   bundle="secrets-broker-$version-linux-$arch"
   stage_dir="$dist_dir/$bundle"
 
-  install -d -m 0755 "$stage_dir/bin" "$stage_dir/deploy"
+  install -d -m 0755 "$stage_dir" "$stage_dir/bin" "$stage_dir/deploy"
 
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
     -trimpath -buildvcs=false \
