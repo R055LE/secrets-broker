@@ -1,5 +1,5 @@
-// Package approval gates commands the policy allowlist doesn't already
-// cover behind a human decision.
+// Package approval gates commands selected by a project's approval mode
+// behind a human decision.
 package approval
 
 import "context"

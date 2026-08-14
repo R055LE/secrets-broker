@@ -38,6 +38,18 @@ shape and the alternatives considered.
 - Bounded worker and relay request bodies, bounded relay state, server timeouts, and hardened
   approval-page response headers.
 
+Each project selects one approval mode:
+
+| `approval` | Exact allowlist match | No allowlist match |
+|---|---|---|
+| `never` | Run | Deny |
+| `prompt` | Run | Prompt |
+| `allowlisted-prompt` | Prompt | Deny |
+| `always` | Prompt | Prompt |
+
+Use `allowlisted-prompt` when a command must satisfy both the exact argv policy and a live human
+approval. `always` lets a human approve argv that are absent from the allowlist.
+
 There are two deliberate limits:
 
 1. The wrapped command receives every secret in the configured BWS project. Its stdout and stderr

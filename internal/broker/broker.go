@@ -205,7 +205,11 @@ func (b *Broker) decide(project config.Project, argv []string) Verdict {
 	if project.Approval == config.ApprovalAlways {
 		return VerdictPrompt
 	}
-	if policy.Match(project.AllowArgv(), argv) {
+	allowlisted := policy.Match(project.AllowArgv(), argv)
+	if allowlisted && project.Approval == config.ApprovalAllowlistedPrompt {
+		return VerdictPrompt
+	}
+	if allowlisted {
 		return VerdictAllow
 	}
 	if project.Approval == config.ApprovalPrompt {

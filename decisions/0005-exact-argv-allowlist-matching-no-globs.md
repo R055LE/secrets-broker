@@ -1,13 +1,14 @@
 # ADR-0005: Exact argv allowlist matching, no globs or prefixes
 
-**Status:** Accepted
+**Status:** Amended by [ADR-0012](0012-allowlisted-prompt-approval-mode.md). Exact matching remains;
+the approval mode now determines whether a match runs immediately or prompts.
 **Date:** 2026-07-31
 **Deciders:** Ross
 
 ## Context
 
-Each project in `policy.toml` has an allowlist of commands that may run without triggering an
-approval prompt. Two ways to express and match an entry:
+Each project in `policy.toml` has an allowlist of commands. Its approval mode determines whether an
+exact match runs immediately or requires human approval. Two ways to express and match an entry:
 
 1. **Shell strings** (`"git push"`), parsed and compared against the requested command line.
    Requires a parser and a set of quoting rules before any comparison can happen at all — an
@@ -40,9 +41,10 @@ parsing anywhere in `internal/policy`.
   written, no mental parsing of glob semantics required.
 
 **Negative**
-- Routine dynamic commands (a commit against a branch name, a version string that changes per
-  release) fall through to the approval prompt every time in v1 — accepted friction in exchange for
-  not having a prefix-match footgun. If prompt fatigue turns out to matter in practice, a narrowly
+- Under `approval = "prompt"`, routine dynamic commands (a commit against a branch name, a version
+  string that changes per release) fall through to the approval prompt every time. Under
+  `approval = "allowlisted-prompt"`, they are denied. This is accepted friction in exchange for
+  avoiding a prefix-match footgun. If prompt fatigue turns out to matter in practice, a narrowly
   scoped trailing wildcard (`argv = ["git", "push", "origin", "..."]`, wildcard only as the last
-  token, never replacing the risky/flag-bearing part of a command) is the deliberate Phase 2
-  answer — not built now, because it's not yet known whether it's actually needed.
+  token, never replacing the risky or flag-bearing part of a command) is the deliberate Phase 2
+  answer. It remains deferred until there is a demonstrated need.
