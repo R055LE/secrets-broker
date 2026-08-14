@@ -64,10 +64,22 @@ task build:relay
 
 The local lint task expects `golangci-lint` on `PATH`. CI pins its own version.
 
+Tagged releases contain versioned Linux archives for amd64 and arm64. Each archive keeps the
+repository layout needed by the installers: the three binaries under `bin/`, deployment files
+under `deploy/`, and the example policy at the archive root. Verify the downloaded archive against
+the adjacent `checksums.txt`, extract it, and run the installer from inside that directory.
+
+```bash
+sha256sum --check --ignore-missing checksums.txt
+tar -xzf secrets-broker-VERSION-linux-ARCH.tar.gz
+cd secrets-broker-VERSION-linux-ARCH
+```
+
 ## Install
 
 The deployment scripts target Linux with systemd, sudo or sudo-rs, standard account tools, and
-POSIX ACL tools (`setfacl` and `getfacl`). Build all three binaries first:
+POSIX ACL tools (`setfacl` and `getfacl`). When installing from a source checkout, build all three
+binaries first. Release archives already contain them:
 
 ```bash
 task build

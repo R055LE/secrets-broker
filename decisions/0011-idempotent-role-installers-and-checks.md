@@ -39,6 +39,9 @@ answer about host configuration without causing approvals, secret resolution, ex
 writes.
 
 Installation still needs root and explicit operator work for policy, token, Tailscale ACLs, and
-relay addressing. IPv6 listener configuration is outside this first installer contract. Release
-packaging must include the scripts and their adjacent policy files before installers can be used
-from release artifacts alone.
+relay addressing. IPv6 listener configuration is outside this first installer contract.
+
+The follow-up release workflow packages each supported architecture with the exact directory
+layout consumed by both installers and exercises the amd64 archive on a fresh host. SHA-256
+checksums cover the published archives. Cryptographic signatures or build attestations remain a
+separate release-hardening decision; checksums alone do not establish publisher identity.
