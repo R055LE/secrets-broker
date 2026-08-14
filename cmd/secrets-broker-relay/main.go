@@ -132,12 +132,9 @@ func validateListenAddr(addr string) error {
 	return nil
 }
 
-// withLogging logs method + path for every request — the request ID is
-// part of the path (/requests/{id}[/decide]), so this is what lets an
-// operator watching relay logs (or a future notification hook tailing
-// them) see which ID a new pending request got, without the relay
-// needing a "list pending requests" endpoint that anyone with control-port
-// access could otherwise use to enumerate them.
+// withLogging records the method and path for every request. Request IDs
+// remain visible in the operator log, while pending-request enumeration is
+// available only through the decision listener's dashboard.
 func withLogging(logger *slog.Logger, port string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		logger.Info("request", "port", port, "method", r.Method, "path", r.URL.Path)

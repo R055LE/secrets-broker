@@ -30,7 +30,7 @@ a second runner UID. Read `decisions/`, especially ADR-0010, before changing a s
 - `internal/config/`: TOML parsing plus stricter worker deployment validation.
 - `internal/execx/`: shared process-execution seam for unit tests.
 - `internal/relay/`: bounded in-memory request store and two HTTP handlers.
-- `deploy/`: root-installed sudoers policy.
+- `deploy/`: idempotent role installers and root-installed deployment policy.
 - `decisions/`: ADRs containing verified behavior and trust-boundary decisions.
 
 ## Build order
@@ -40,6 +40,7 @@ task test
 task test:integration  # Real Bitwarden tests; skips unless the documented env vars are set
 task vet
 task lint
+task check:installers
 task build
 task build:worker
 task build:relay
