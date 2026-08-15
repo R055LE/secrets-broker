@@ -84,16 +84,22 @@ checksum and GitHub build provenance before extracting it and running the instal
 that directory:
 
 ```bash
-archive=secrets-broker-VERSION-linux-ARCH.tar.gz
+version=VERSION
+arch=ARCH
+archive="secrets-broker-$version-linux-$arch.tar.gz"
 sha256sum --check --ignore-missing checksums.txt
-gh attestation verify "$archive" --repo R055LE/secrets-broker
+gh attestation verify "$archive" \
+  --repo R055LE/secrets-broker \
+  --signer-workflow R055LE/secrets-broker/.github/workflows/ci.yml \
+  --source-ref "refs/tags/$version" \
+  --deny-self-hosted-runners
 tar -xzf "$archive"
-cd secrets-broker-VERSION-linux-ARCH
+cd "secrets-broker-$version-linux-$arch"
 ```
 
 The checksum detects corruption or a mismatched download. The attestation binds the archive digest
-to the release workflow in this repository. It does not establish that the source or workflow is
-safe.
+to the release workflow and tag in this repository and rejects provenance from a self-hosted
+runner. It does not establish that the source or workflow is safe.
 
 ## Install
 
