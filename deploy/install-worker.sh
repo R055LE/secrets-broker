@@ -284,6 +284,7 @@ check_worker() {
   local cli_version
   local bws_version
   local sudo_version
+  local worker_check
 
   for command_name in getent stat visudo getfacl grep cmp runuser sudo cut; do
     require_command "$command_name"
@@ -328,11 +329,14 @@ check_worker() {
   getfacl -cp "$client_home" | grep -Fxq "user:$RUNNER_USER:--x" ||
     fail "$client_home does not grant traverse access to $RUNNER_USER"
 
+  worker_check="$(runuser -u "$WORKER_USER" -- "$WORKER_TARGET" check 2>&1)" ||
+    fail "worker semantic check failed: $worker_check"
   cli_version="$(runuser -u "$client_user" -- "$CLI_TARGET" version 2>&1)" || fail "CLI version check failed"
   bws_version="$(runuser -u "$RUNNER_USER" -- "$BWS_TARGET" --version 2>&1)" || fail "bws version check failed"
   sudo_version="$(sudo --version 2>&1 | sed -n '1p')"
 
   note "Worker check passed."
+  note "$worker_check"
   note "CLI: ${cli_version%%$'\n'*}"
   note "bws: ${bws_version%%$'\n'*}"
   note "sudo: $sudo_version"
