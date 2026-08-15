@@ -116,6 +116,7 @@ jobs:
           chmod 0755 "$test_dir/bws"
           sed \
             -e 's#http://PASTE-RELAY-TAILSCALE-IP-HERE:7620#http://100.100.100.100:7620#' \
+            -e 's#command_path = ".*"#command_path = "/usr/bin:/bin"#' \
             -e 's#PASTE-YOUR-BWS-SECRETS-MANAGER-PROJECT-UUID-HERE#00000000-0000-0000-0000-000000000000#' \
             -e 's#/home/YOUR-USER/code/YOUR-PROJECT#/home/runner#' \
             policy.example.toml > "$test_dir/policy.toml"
