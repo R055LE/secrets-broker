@@ -78,14 +78,22 @@ The local lint task expects `golangci-lint` on `PATH`. CI pins its own version.
 
 Tagged releases contain versioned Linux archives for amd64 and arm64. Each archive keeps the
 repository layout needed by the installers: the three binaries under `bin/`, deployment files
-under `deploy/`, and the example policy at the archive root. Verify the downloaded archive against
-the adjacent `checksums.txt`, extract it, and run the installer from inside that directory.
+under `deploy/`, and the example policy at the archive root. Use a current GitHub CLI with
+`gh attestation verify`; older distro packages may not include that command. Verify the archive's
+checksum and GitHub build provenance before extracting it and running the installer from inside
+that directory:
 
 ```bash
+archive=secrets-broker-VERSION-linux-ARCH.tar.gz
 sha256sum --check --ignore-missing checksums.txt
-tar -xzf secrets-broker-VERSION-linux-ARCH.tar.gz
+gh attestation verify "$archive" --repo R055LE/secrets-broker
+tar -xzf "$archive"
 cd secrets-broker-VERSION-linux-ARCH
 ```
+
+The checksum detects corruption or a mismatched download. The attestation binds the archive digest
+to the release workflow in this repository. It does not establish that the source or workflow is
+safe.
 
 ## Install
 
