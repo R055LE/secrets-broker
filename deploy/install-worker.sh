@@ -16,6 +16,7 @@ readonly WORKER_TARGET=/usr/local/libexec/secrets-broker-worker
 readonly BWS_TARGET=/usr/local/bin/bws
 readonly POLICY_TARGET=/etc/secrets-broker/policy.toml
 readonly SUDOERS_TARGET=/etc/sudoers.d/secrets-broker
+readonly LOGROTATE_TARGET=/etc/logrotate.d/secrets-broker
 readonly AUDIT_DIR=/var/log/secrets-broker
 readonly AUDIT_FILE=/var/log/secrets-broker/audit.jsonl
 readonly TOKEN_FILE=/var/lib/secrets-broker/bws-access-token
@@ -34,6 +35,7 @@ worker_source="$repo_root/bin/secrets-broker-worker"
 bws_source=""
 policy_source="$repo_root/policy.example.toml"
 sudoers_source="$script_dir/secrets-broker.sudoers"
+logrotate_source="$script_dir/secrets-broker.logrotate"
 
 usage() {
   cat <<'EOF'
@@ -49,7 +51,8 @@ Install options:
   --sudoers PATH   Sudoers policy (default: deploy/secrets-broker.sudoers)
 
 The installer never creates or replaces the BWS token and never replaces an
-existing policy. Run check after configuring both.
+existing project policy. Bundled sudoers and audit-rotation policies are
+updated on install. Run check after configuring the token and project policy.
 EOF
 }
 
@@ -208,7 +211,7 @@ install_worker() {
   local client_home
   local sudoers_tmp
 
-  for command_name in getent groupadd useradd usermod install stat visudo setfacl cut; do
+  for command_name in getent groupadd useradd usermod install stat visudo setfacl logrotate cut; do
     require_command "$command_name"
   done
 
@@ -216,8 +219,13 @@ install_worker() {
   require_executable_source "$worker_source" "worker source"
   require_source_file "$policy_source" "policy source"
   require_source_file "$sudoers_source" "sudoers source"
+  require_source_file "$logrotate_source" "logrotate source"
   if [[ -e "$POLICY_TARGET" || -L "$POLICY_TARGET" ]]; then
     [[ -f "$POLICY_TARGET" && ! -L "$POLICY_TARGET" ]] || fail "refusing unsafe existing policy: $POLICY_TARGET"
+  fi
+  if [[ -e "$LOGROTATE_TARGET" || -L "$LOGROTATE_TARGET" ]]; then
+    [[ -f "$LOGROTATE_TARGET" && ! -L "$LOGROTATE_TARGET" ]] ||
+      fail "refusing unsafe existing logrotate policy: $LOGROTATE_TARGET"
   fi
   if [[ -n "$bws_source" ]]; then
     require_executable_source "$bws_source" "bws source"
@@ -267,6 +275,8 @@ install_worker() {
 
   install -o root -g root -m 0440 "$sudoers_tmp" "$SUDOERS_TARGET"
   visudo -cf "$SUDOERS_TARGET" >/dev/null
+  install -o root -g root -m 0644 "$logrotate_source" "$LOGROTATE_TARGET"
+  logrotate --debug "$LOGROTATE_TARGET" >/dev/null 2>&1 || fail "installed logrotate policy is invalid"
   setfacl -m "u:$WORKER_USER:--x,u:$RUNNER_USER:--x" "$client_home"
 
   note "Worker deployment installed."
@@ -286,7 +296,7 @@ check_worker() {
   local sudo_version
   local worker_check
 
-  for command_name in getent stat visudo getfacl grep cmp runuser sudo cut; do
+  for command_name in getent stat visudo getfacl grep cmp runuser sudo logrotate cut; do
     require_command "$command_name"
   done
 
@@ -309,6 +319,7 @@ check_worker() {
   check_regular_file "$BWS_TARGET" root root 755
   check_regular_file "$POLICY_TARGET" root "$WORKER_USER" 640
   check_regular_file "$SUDOERS_TARGET" root root 440
+  check_regular_file "$LOGROTATE_TARGET" root root 644
   [[ -f "$TOKEN_FILE" && ! -L "$TOKEN_FILE" ]] || fail "expected a regular, non-symlink file: $TOKEN_FILE"
   [[ "$(stat -c %U "$TOKEN_FILE")" == "$WORKER_USER" ]] || fail "$TOKEN_FILE has unexpected owner"
   [[ "$(stat -c %G "$TOKEN_FILE")" == "$WORKER_USER" ]] || fail "$TOKEN_FILE has unexpected group"
@@ -323,7 +334,9 @@ check_worker() {
 
   ! grep -Eq 'PASTE-|YOUR-' "$POLICY_TARGET" || fail "$POLICY_TARGET still contains template placeholders"
   cmp -s "$SUDOERS_TARGET" "$sudoers_source" || fail "$SUDOERS_TARGET differs from the bundled policy"
+  cmp -s "$LOGROTATE_TARGET" "$logrotate_source" || fail "$LOGROTATE_TARGET differs from the bundled policy"
   visudo -cf "$SUDOERS_TARGET" >/dev/null
+  logrotate --debug "$LOGROTATE_TARGET" >/dev/null 2>&1 || fail "$LOGROTATE_TARGET is invalid"
   getfacl -cp "$client_home" | grep -Fxq "user:$WORKER_USER:--x" ||
     fail "$client_home does not grant traverse access to $WORKER_USER"
   getfacl -cp "$client_home" | grep -Fxq "user:$RUNNER_USER:--x" ||
@@ -341,6 +354,7 @@ check_worker() {
   note "bws: ${bws_version%%$'\n'*}"
   note "sudo: $sudo_version"
   note "Token metadata: owner and mode valid, $token_size bytes."
+  note "Audit rotation: daily, 10 MiB threshold, 30 retained rotations."
 }
 
 case "$mode" in

@@ -22,7 +22,9 @@ idempotent `install` mode and a read-only `check` mode.
 The worker installer owns deterministic accounts, groups, fixed executable paths, private state
 directories, the sudoers policy, and home-directory traverse ACLs. It installs an initial policy
 only when none exists. It never creates or replaces the BWS access token. Its check validates the
-deployment contract and reports token metadata without opening the token or invoking the worker.
+deployment contract and reports token metadata without opening the token. Its reserved worker
+subcheck parses policy and validates runtime access as the worker UID without entering the
+credential-bearing request protocol.
 
 The relay installer owns the binary, systemd unit, and initial listener environment. It preserves
 an existing environment on every rerun. The first version accepts literal Tailscale IPv4 addresses

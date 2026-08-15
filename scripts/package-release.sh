@@ -56,6 +56,7 @@ for arch in amd64 arm64; do
   install -m 0644 \
     deploy/secrets-broker-relay.env.example \
     deploy/secrets-broker-relay.service \
+    deploy/secrets-broker.logrotate \
     deploy/secrets-broker.sudoers \
     "$stage_dir/deploy/"
   install -m 0644 policy.example.toml README.md LICENSE "$stage_dir/"
