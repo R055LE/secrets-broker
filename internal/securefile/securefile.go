@@ -28,6 +28,28 @@ func Read(path string, maxBytes int64, forbiddenPerms os.FileMode, allowRootOwne
 	return data, nil
 }
 
+// ValidatePrivateFile checks a sensitive file's metadata without reading its
+// contents. The file must be a regular file owned by the current user with no
+// group or other permissions.
+func ValidatePrivateFile(path string, maxBytes int64) (int64, error) {
+	f, err := open(path, syscall.O_RDONLY, 0)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = f.Close() }()
+	if err := validate(f, 0o077, false); err != nil {
+		return 0, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return 0, fmt.Errorf("stating %q: %w", path, err)
+	}
+	if info.Size() > maxBytes {
+		return 0, fmt.Errorf("%q exceeds %d bytes", path, maxBytes)
+	}
+	return info.Size(), nil
+}
+
 func OpenAppend(path string, perm os.FileMode) (*os.File, error) {
 	f, err := open(path, syscall.O_APPEND|syscall.O_CREAT|syscall.O_WRONLY, perm)
 	if err != nil {
@@ -88,7 +110,7 @@ func ValidateExecutable(path string) error {
 }
 
 func open(path string, flags int, perm os.FileMode) (*os.File, error) {
-	fd, err := syscall.Open(path, flags|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, uint32(perm.Perm()))
+	fd, err := syscall.Open(path, flags|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, uint32(perm.Perm()))
 	if err != nil {
 		return nil, fmt.Errorf("opening %q: %w", path, err)
 	}

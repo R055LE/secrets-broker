@@ -131,9 +131,11 @@ sudo deploy/install-worker.sh check --client-user "$USER"
 ```
 
 The check validates accounts, group membership, ACLs, fixed paths, ownership, modes, sudoers
-syntax, template completion, and installed CLI, `bws`, and sudo versions. It inspects only the
-token file's metadata and size. It does not read or print the token, invoke the worker, request an
-approval, or write an audit record.
+syntax, template completion, and installed CLI, `bws`, and sudo versions. It also invokes the
+worker's reserved `check` mode as the worker account. That mode parses and validates the policy,
+runtime paths, project working directories, and token metadata. It does not read or print the
+token, contact the relay, invoke `bws`, run a project command, request an approval, or write an
+audit record.
 
 Install the relay on a separate Tailscale device. Start from the example and replace both values
 with that device's literal Tailscale IPv4 address:

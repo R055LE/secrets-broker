@@ -113,6 +113,85 @@ func TestServerExecutesAllowedRequestThroughFixedConfiguration(t *testing.T) {
 	}
 }
 
+func TestServerCheckValidatesDeploymentWithoutSideEffects(t *testing.T) {
+	workingDir := t.TempDir()
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("test-token"), 0o600); err != nil {
+		t.Fatalf("writing token: %v", err)
+	}
+	fakeExec := &execx.FakeRunner{}
+	configPath, _ := writeWorkerConfig(t, workingDir, tokenPath)
+	auditPath := filepath.Join(t.TempDir(), "private", "audit.jsonl")
+	server := &Server{ConfigPath: configPath, AuditLogPath: auditPath, ExecRunner: fakeExec}
+
+	result, err := server.Check()
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if result.Projects != 1 || result.TokenBytes != int64(len("test-token")) {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if len(fakeExec.Calls) != 0 {
+		t.Fatalf("check executed a command: %+v", fakeExec.Calls)
+	}
+	if _, err := os.Stat(auditPath); !os.IsNotExist(err) {
+		t.Fatalf("check created an audit log: %v", err)
+	}
+}
+
+func TestServerCheckRejectsInvalidDeploymentState(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, workingDir, tokenPath string)
+		want   string
+	}{
+		{
+			name: "empty token",
+			mutate: func(t *testing.T, _, tokenPath string) {
+				if err := os.WriteFile(tokenPath, nil, 0o600); err != nil {
+					t.Fatalf("emptying token: %v", err)
+				}
+			},
+			want: "is empty",
+		},
+		{
+			name: "unsafe token permissions",
+			mutate: func(t *testing.T, _, tokenPath string) {
+				if err := os.Chmod(tokenPath, 0o640); err != nil {
+					t.Fatalf("opening token permissions: %v", err)
+				}
+			},
+			want: "permissions are too open",
+		},
+		{
+			name: "missing working directory",
+			mutate: func(t *testing.T, workingDir, _ string) {
+				if err := os.Remove(workingDir); err != nil {
+					t.Fatalf("removing working directory: %v", err)
+				}
+			},
+			want: "resolving working directory",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workingDir := t.TempDir()
+			tokenPath := filepath.Join(t.TempDir(), "token")
+			if err := os.WriteFile(tokenPath, []byte("test-token"), 0o600); err != nil {
+				t.Fatalf("writing token: %v", err)
+			}
+			configPath, _ := writeWorkerConfig(t, workingDir, tokenPath)
+			tt.mutate(t, workingDir, tokenPath)
+
+			_, err := (&Server{ConfigPath: configPath, ExecRunner: &execx.FakeRunner{}}).Check()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("got error %v; want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestServerAuditsInvalidConfiguration(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "policy.toml")
 	if err := os.WriteFile(configPath, []byte("not valid toml = ["), 0o600); err != nil {
