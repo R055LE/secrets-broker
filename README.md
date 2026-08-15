@@ -89,9 +89,9 @@ cd secrets-broker-VERSION-linux-ARCH
 
 ## Install
 
-The deployment scripts target Linux with systemd, sudo or sudo-rs, standard account tools, and
-POSIX ACL tools (`setfacl` and `getfacl`). When installing from a source checkout, build all three
-binaries first. Release archives already contain them:
+The deployment scripts target Linux with systemd, sudo or sudo-rs, logrotate, standard account
+tools, and POSIX ACL tools (`setfacl` and `getfacl`). When installing from a source checkout, build
+all three binaries first. Release archives already contain them:
 
 ```bash
 task build
@@ -107,9 +107,9 @@ sudo deploy/install-worker.sh install --client-user "$USER" --bws /path/to/bws
 ```
 
 The installer creates the worker, runner, and client identities; installs root-owned binaries and
-sudoers policy; establishes private state and audit directories; and grants both service accounts
-traverse-only access to the client's home directory. It never creates or replaces the token and
-never replaces an existing policy.
+sudoers and audit-rotation policies; establishes private state and audit directories; and grants
+both service accounts traverse-only access to the client's home directory. It never creates or
+replaces the token and never replaces an existing project policy.
 
 Edit `/etc/secrets-broker/policy.toml` as root. The configured working directory must be
 traversable by `secrets-broker` and usable by `secrets-broker-runner`. Grant traverse access on any
@@ -136,6 +136,14 @@ worker's reserved `check` mode as the worker account. That mode parses and valid
 runtime paths, project working directories, and token metadata. It does not read or print the
 token, contact the relay, invoke `bws`, run a project command, request an approval, or write an
 audit record.
+
+The root-owned logrotate policy checks the audit file daily and rotates it early when it exceeds
+10 MiB. It retains 30 rotations, compresses older files after one cycle, and creates each new
+active log as `secrets-broker:secrets-broker` mode `0600`. Rotation renames the file instead of
+copying and truncating it. The worker opens the fixed audit path for every record, so it needs no
+reload. A rotation between a run's start and finish records can place them in adjacent files; the
+shared run ID still correlates the pair. The 10 MiB threshold is evaluated when the host's
+logrotate schedule runs, so it is not a real-time disk quota.
 
 Install the relay on a separate Tailscale device. Start from the example and replace both values
 with that device's literal Tailscale IPv4 address:
