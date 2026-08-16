@@ -49,6 +49,7 @@ jobs:
       - name: Build
         run: |
           go build -ldflags="-s -w" -o bin/secrets-broker ./cmd/secrets-broker
+          go build -ldflags="-s -w" -o bin/secrets-broker-admin ./cmd/secrets-broker-admin
           go build -ldflags="-s -w" -o bin/secrets-broker-worker ./cmd/secrets-broker-worker
           go build -ldflags="-s -w" -o bin/secrets-broker-relay ./cmd/secrets-broker-relay
 
@@ -86,6 +87,7 @@ jobs:
             test "$root_mode" = "drwxr-xr-x"
             for path in \
               bin/secrets-broker \
+              bin/secrets-broker-admin \
               bin/secrets-broker-worker \
               bin/secrets-broker-relay \
               deploy/install-worker.sh \
@@ -130,6 +132,14 @@ jobs:
             'umask 077; printf %s ci-only-placeholder > /var/lib/secrets-broker/bws-access-token'
           sudo "$release_root/deploy/install-worker.sh" check --client-user runner
           sudo test ! -e /var/log/secrets-broker/audit.jsonl
+
+          sudo /usr/local/sbin/secrets-broker-admin projects list | grep -Fq agent-project
+          sudo /usr/local/sbin/secrets-broker-admin projects set-approval agent-project automatic
+          sudo grep -Fq 'approval = "never"' /etc/secrets-broker/policy.toml
+          test "$(sudo stat -c '%U:%G:%a' /etc/secrets-broker/policy.toml)" = "root:secrets-broker:640"
+          sudo /usr/local/sbin/secrets-broker-admin projects set-approval agent-project confirm
+          sudo grep -Fq 'approval = "allowlisted-prompt"' /etc/secrets-broker/policy.toml
+          sudo "$release_root/deploy/install-worker.sh" check --client-user runner
 
           sudo /bin/sh -c 'printf "\n# preserved by installer test\n" >> /etc/secrets-broker/policy.toml'
           policy_before="$(sudo sha256sum /etc/secrets-broker/policy.toml)"

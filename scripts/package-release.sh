@@ -47,8 +47,12 @@ for arch in amd64 arm64; do
     -o "$stage_dir/bin/secrets-broker-worker" ./cmd/secrets-broker-worker
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
     -trimpath -buildvcs=false -ldflags="-s -w -buildid=" \
+    -o "$stage_dir/bin/secrets-broker-admin" ./cmd/secrets-broker-admin
+  CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
+    -trimpath -buildvcs=false -ldflags="-s -w -buildid=" \
     -o "$stage_dir/bin/secrets-broker-relay" ./cmd/secrets-broker-relay
   chmod 0755 "$stage_dir/bin/secrets-broker" \
+    "$stage_dir/bin/secrets-broker-admin" \
     "$stage_dir/bin/secrets-broker-worker" \
     "$stage_dir/bin/secrets-broker-relay"
 
