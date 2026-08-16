@@ -18,6 +18,8 @@ a second runner UID. Read `decisions/`, especially ADR-0010, before changing a s
 - `cmd/secrets-broker/`: untrusted, agent-facing CLI. It has no adapter or path override flags.
 - `cmd/secrets-broker-worker/`: fixed client protocol plus a reserved admin check, run as
   `secrets-broker`.
+- `cmd/secrets-broker-admin/`: root-only project listing and safe approval-mode changes against the
+  fixed worker policy path.
 - `cmd/secrets-broker-relay/`: two-port approval relay for a separate Tailscale device.
 - `internal/worker/`: bounded JSON protocol, fixed client invocation, and worker composition.
 - `internal/broker/`: deny-by-default policy, approval, token, audit, and execution flow. It depends
@@ -29,6 +31,7 @@ a second runner UID. Read `decisions/`, especially ADR-0010, before changing a s
 - `internal/securefile/`: no-follow opens plus type, owner, mode, and size checks.
 - `internal/policy/`: pure exact-argv matching.
 - `internal/config/`: TOML parsing plus stricter worker deployment validation.
+- `internal/admin/`: metadata-preserving, validated atomic policy updates.
 - `internal/execx/`: shared process-execution seam for unit tests.
 - `internal/relay/`: bounded in-memory request store and two HTTP handlers.
 - `deploy/`: idempotent role installers and root-installed deployment policy.
@@ -44,6 +47,7 @@ task lint
 task check:installers
 task build
 task build:worker
+task build:admin
 task build:relay
 ```
 
@@ -55,6 +59,8 @@ The integration runner path also requires the isolated worker and runner sudoers
   requested change needs one.
 - The caller controls only project alias, resolved cwd, exact argv, and dry-run. Do not add config,
   audit, token, worker path, executable path, or approval override flags.
+- Administrator mutations belong in the separate root-only CLI, must use the fixed worker policy
+  path, and must not be added to the agent sudoers policy.
 - `/usr/local/libexec/secrets-broker-worker`, `/etc/secrets-broker/policy.toml`, and
   `/var/log/secrets-broker/audit.jsonl` are fixed deployment paths.
 - The worker UID and runner UID must remain distinct. The runner receives project secrets but must

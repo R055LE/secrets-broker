@@ -12,6 +12,7 @@ readonly CLIENT_GROUP=secrets-broker-clients
 readonly WORKER_HOME=/var/lib/secrets-broker
 readonly RUNNER_HOME=/var/lib/secrets-broker-runner
 readonly CLI_TARGET=/usr/local/bin/secrets-broker
+readonly ADMIN_TARGET=/usr/local/sbin/secrets-broker-admin
 readonly WORKER_TARGET=/usr/local/libexec/secrets-broker-worker
 readonly BWS_TARGET=/usr/local/bin/bws
 readonly POLICY_TARGET=/etc/secrets-broker/policy.toml
@@ -31,6 +32,7 @@ fi
 
 client_user=""
 cli_source="$repo_root/bin/secrets-broker"
+admin_source="$repo_root/bin/secrets-broker-admin"
 worker_source="$repo_root/bin/secrets-broker-worker"
 bws_source=""
 policy_source="$repo_root/policy.example.toml"
@@ -45,6 +47,7 @@ Usage:
 
 Install options:
   --cli PATH       Agent-facing CLI (default: bin/secrets-broker)
+  --admin PATH     Root-only administrator CLI (default: bin/secrets-broker-admin)
   --worker PATH    Fixed worker binary (default: bin/secrets-broker-worker)
   --bws PATH       Bitwarden bws binary; required when not already installed
   --policy PATH    Initial policy, installed only when no policy exists
@@ -169,6 +172,11 @@ parse_args() {
         cli_source="$2"
         shift 2
         ;;
+      --admin)
+        (($# >= 2)) || fail "--admin requires a value"
+        admin_source="$2"
+        shift 2
+        ;;
       --worker)
         (($# >= 2)) || fail "--worker requires a value"
         worker_source="$2"
@@ -216,6 +224,7 @@ install_worker() {
   done
 
   require_executable_source "$cli_source" "CLI source"
+  require_executable_source "$admin_source" "administrator CLI source"
   require_executable_source "$worker_source" "worker source"
   require_source_file "$policy_source" "policy source"
   require_source_file "$sudoers_source" "sudoers source"
@@ -256,6 +265,7 @@ install_worker() {
   install -d -o "$WORKER_USER" -g "$WORKER_USER" -m 0700 "$AUDIT_DIR"
 
   install -D -o root -g root -m 0755 "$cli_source" "$CLI_TARGET"
+  install -D -o root -g root -m 0755 "$admin_source" "$ADMIN_TARGET"
   install -D -o root -g root -m 0755 "$worker_source" "$WORKER_TARGET"
   if [[ -n "$bws_source" ]]; then
     install -D -o root -g root -m 0755 "$bws_source" "$BWS_TARGET"
@@ -315,6 +325,7 @@ check_worker() {
   check_directory /etc/secrets-broker root root 755
   check_directory "$AUDIT_DIR" "$WORKER_USER" "$WORKER_USER" 700
   check_regular_file "$CLI_TARGET" root root 755
+  check_regular_file "$ADMIN_TARGET" root root 755
   check_regular_file "$WORKER_TARGET" root root 755
   check_regular_file "$BWS_TARGET" root root 755
   check_regular_file "$POLICY_TARGET" root "$WORKER_USER" 640
@@ -344,6 +355,7 @@ check_worker() {
 
   worker_check="$(runuser -u "$WORKER_USER" -- "$WORKER_TARGET" check 2>&1)" ||
     fail "worker semantic check failed: $worker_check"
+  "$ADMIN_TARGET" projects list >/dev/null || fail "administrator CLI policy check failed"
   cli_version="$(runuser -u "$client_user" -- "$CLI_TARGET" version 2>&1)" || fail "CLI version check failed"
   bws_version="$(runuser -u "$RUNNER_USER" -- "$BWS_TARGET" --version 2>&1)" || fail "bws version check failed"
   sudo_version="$(sudo --version 2>&1 | sed -n '1p')"

@@ -130,7 +130,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading config: %w", err)
 	}
-	return load(data)
+	return Parse(data)
 }
 
 // LoadWorker applies ownership, type, symlink, size, and permission checks
@@ -140,10 +140,13 @@ func LoadWorker(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading config: %w", err)
 	}
-	return load(data)
+	return Parse(data)
 }
 
-func load(data []byte) (*Config, error) {
+// Parse decodes and validates policy data already obtained through a caller's
+// chosen trust boundary. File-backed callers should normally use Load or
+// LoadWorker instead.
+func Parse(data []byte) (*Config, error) {
 	var cfg Config
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)

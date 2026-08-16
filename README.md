@@ -77,7 +77,7 @@ task build:relay
 The local lint task expects `golangci-lint` on `PATH`. CI pins its own version.
 
 Tagged releases contain versioned Linux archives for amd64 and arm64. Each archive keeps the
-repository layout needed by the installers: the three binaries under `bin/`, deployment files
+repository layout needed by the installers: the four binaries under `bin/`, deployment files
 under `deploy/`, and the example policy at the archive root. Use a current GitHub CLI with
 `gh attestation verify`; older distro packages may not include that command. Verify the archive's
 checksum and GitHub build provenance before extracting it and running the installer from inside
@@ -105,10 +105,11 @@ runner. It does not establish that the source or workflow is safe.
 
 The deployment scripts target Linux with systemd, sudo or sudo-rs, logrotate, standard account
 tools, and POSIX ACL tools (`setfacl` and `getfacl`). When installing from a source checkout, build
-all three binaries first. Release archives already contain them:
+all four binaries first. Release archives already contain them:
 
 ```bash
 task build
+task build:admin
 task build:worker
 task build:relay
 ```
@@ -143,6 +144,27 @@ Run the read-only deployment check after policy and token provisioning:
 ```bash
 sudo deploy/install-worker.sh check --client-user "$USER"
 ```
+
+### Manage project approvals
+
+The worker installer also installs `/usr/local/sbin/secrets-broker-admin`. It is a separate,
+root-only interface to the fixed worker policy; it is not available through the agent sudoers rule
+and has no policy-path override.
+
+```bash
+sudo secrets-broker-admin projects list
+sudo secrets-broker-admin projects set-approval omada-read confirm
+sudo secrets-broker-admin projects set-approval omada-read automatic
+```
+
+`confirm` means an exact allowlist match still requires a live approval. `automatic` means an exact
+allowlist match runs without a prompt; unlisted commands remain denied. The broader legacy modes
+are shown as `prompt-unlisted` and `prompt-any` by `projects list`, but this command deliberately
+cannot select them.
+
+An update changes only the selected project's approval value, validates the complete worker policy,
+and atomically replaces the file while preserving its owner, group, and permissions. A failed
+validation leaves the original policy in place.
 
 The check validates accounts, group membership, ACLs, fixed paths, ownership, modes, sudoers
 syntax, template completion, and installed CLI, `bws`, and sudo versions. It also invokes the
@@ -206,6 +228,7 @@ returned.
 
 ```text
 cmd/secrets-broker/        Agent-facing CLI
+cmd/secrets-broker-admin/  Root-only fixed-policy administrator CLI
 cmd/secrets-broker-worker/ Fixed credential-owning worker
 cmd/secrets-broker-relay/  Approval relay for a separate device
 internal/worker/           Bounded request/response protocol and worker composition
@@ -218,6 +241,7 @@ internal/audit/            Synced JSONL start/finish records
 internal/relay/            Bounded in-memory store and HTTP handlers
 internal/policy/           Exact argv matching
 internal/config/           TOML parsing and worker-specific validation
+internal/admin/            Validated atomic project policy updates
 decisions/                 Architecture decision records
 deploy/                    Role installers and administrator-owned deployment policy
 ```

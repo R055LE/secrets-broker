@@ -29,6 +29,11 @@ tasks:
     cmds:
       - go build -ldflags="-s -w" -o bin/secrets-broker-worker ./cmd/secrets-broker-worker
 
+  build:admin:
+    desc: Build the root-only fixed-policy administrator CLI
+    cmds:
+      - go build -ldflags="-s -w" -o bin/secrets-broker-admin ./cmd/secrets-broker-admin
+
   test:
     desc: Run the hermetic unit test suite (no KWallet/kdialog/bws required)
     cmds:
