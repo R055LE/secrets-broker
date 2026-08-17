@@ -217,9 +217,10 @@ parse_args() {
 install_worker() {
   local nologin_shell
   local client_home
+  local client_membership_added=false
   local sudoers_tmp
 
-  for command_name in getent groupadd useradd usermod install stat visudo setfacl logrotate cut; do
+  for command_name in getent groupadd useradd usermod install stat visudo setfacl logrotate cut id tr grep; do
     require_command "$command_name"
   done
 
@@ -255,7 +256,10 @@ install_worker() {
   ensure_service_account "$WORKER_USER" "$WORKER_HOME" "$nologin_shell"
   ensure_service_account "$RUNNER_USER" "$RUNNER_HOME" "$nologin_shell"
 
-  usermod -a -G "$CLIENT_GROUP" "$client_user"
+  if ! id -nG "$client_user" | tr ' ' '\n' | grep -Fxq "$CLIENT_GROUP"; then
+    usermod -a -G "$CLIENT_GROUP" "$client_user"
+    client_membership_added=true
+  fi
   account_fields "$client_user"
   client_home="$ACCOUNT_HOME"
 
@@ -290,8 +294,16 @@ install_worker() {
   setfacl -m "u:$WORKER_USER:--x,u:$RUNNER_USER:--x" "$client_home"
 
   note "Worker deployment installed."
-  note "Next: edit $POLICY_TARGET as root, then provision $TOKEN_FILE from a trusted terminal."
-  note "Log out and back in before using the new $CLIENT_GROUP membership."
+  if grep -Eq 'PASTE-|YOUR-' "$POLICY_TARGET"; then
+    note "Next: edit $POLICY_TARGET as root."
+  fi
+  if { [[ ! -e "$TOKEN_FILE" && ! -L "$TOKEN_FILE" ]]; } ||
+    { [[ -f "$TOKEN_FILE" && ! -L "$TOKEN_FILE" && ! -s "$TOKEN_FILE" ]]; }; then
+    note "Next: provision $TOKEN_FILE from a trusted terminal."
+  fi
+  if [[ "$client_membership_added" == true ]]; then
+    note "Log out and back in before using the new $CLIENT_GROUP membership."
+  fi
   note "Finish with: sudo $script_dir/install-worker.sh check --client-user $client_user"
   rm -f "$sudoers_tmp"
   trap - EXIT

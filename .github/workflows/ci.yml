@@ -125,10 +125,16 @@ jobs:
             -e 's#/home/YOUR-USER/code/YOUR-PROJECT#/home/runner#' \
             policy.example.toml > "$test_dir/policy.toml"
 
-          sudo "$release_root/deploy/install-worker.sh" install \
-            --client-user runner \
-            --bws "$test_dir/bws" \
-            --policy "$test_dir/policy.toml"
+          install_output="$(
+            sudo "$release_root/deploy/install-worker.sh" install \
+              --client-user runner \
+              --bws "$test_dir/bws" \
+              --policy "$test_dir/policy.toml"
+          )"
+          printf '%s\n' "$install_output"
+          [[ "$install_output" != *"Next: edit /etc/secrets-broker/policy.toml as root."* ]]
+          [[ "$install_output" == *"Next: provision /var/lib/secrets-broker/bws-access-token from a trusted terminal."* ]]
+          [[ "$install_output" == *"Log out and back in before using the new secrets-broker-clients membership."* ]]
           sudo -u secrets-broker /bin/sh -c \
             'umask 077; printf %s ci-only-placeholder > /var/lib/secrets-broker/bws-access-token'
           sudo "$release_root/deploy/install-worker.sh" check --client-user runner
@@ -145,9 +151,16 @@ jobs:
           sudo /bin/sh -c 'printf "\n# preserved by installer test\n" >> /etc/secrets-broker/policy.toml'
           policy_before="$(sudo sha256sum /etc/secrets-broker/policy.toml)"
           token_before="$(sudo sha256sum /var/lib/secrets-broker/bws-access-token)"
-          sudo "$release_root/deploy/install-worker.sh" install \
-            --client-user runner \
-            --policy "$test_dir/policy.toml"
+          upgrade_output="$(
+            sudo "$release_root/deploy/install-worker.sh" install \
+              --client-user runner \
+              --policy "$test_dir/policy.toml"
+          )"
+          printf '%s\n' "$upgrade_output"
+          [[ "$upgrade_output" == *"Preserved existing policy at /etc/secrets-broker/policy.toml."* ]]
+          [[ "$upgrade_output" != *"Next: edit /etc/secrets-broker/policy.toml as root."* ]]
+          [[ "$upgrade_output" != *"Next: provision /var/lib/secrets-broker/bws-access-token from a trusted terminal."* ]]
+          [[ "$upgrade_output" != *"Log out and back in before using the new secrets-broker-clients membership."* ]]
           test "$policy_before" = "$(sudo sha256sum /etc/secrets-broker/policy.toml)"
           test "$token_before" = "$(sudo sha256sum /var/lib/secrets-broker/bws-access-token)"
           sudo "$release_root/deploy/install-worker.sh" check --client-user runner
