@@ -115,6 +115,7 @@ jobs:
           tar -xzf dist/secrets-broker-v0.0.0-ci-linux-amd64.tar.gz -C "$test_dir"
           release_root="$test_dir/secrets-broker-v0.0.0-ci-linux-amd64"
 
+          # shellcheck disable=SC2016 # $1 belongs in the generated mock script.
           printf '%s\n' '#!/bin/sh' 'test "$1" = --version && { echo "bws 0.0.0-ci"; exit 0; }' 'exit 1' > "$test_dir/bws"
           chmod 0755 "$test_dir/bws"
           sed \
@@ -159,8 +160,8 @@ jobs:
           test "$(sudo stat -c '%U:%G:%a' /var/log/secrets-broker/audit.jsonl)" = "secrets-broker:secrets-broker:600"
           test "$(sudo stat -c '%U:%G:%a' /var/log/secrets-broker/audit.jsonl.1)" = "secrets-broker:secrets-broker:600"
           sudo grep -Fxq ci-audit-record /var/log/secrets-broker/audit.jsonl.1
-          ! sudo -u runner test -r /var/log/secrets-broker/audit.jsonl.1
-          ! sudo -u secrets-broker-runner test -r /var/log/secrets-broker/audit.jsonl.1
+          sudo -u runner test ! -r /var/log/secrets-broker/audit.jsonl.1
+          sudo -u secrets-broker-runner test ! -r /var/log/secrets-broker/audit.jsonl.1
 
       - name: Install and check relay service
         run: |
@@ -208,12 +209,12 @@ jobs:
         run: scripts/package-release.sh "$VERSION"
 
       - name: Attest release bundles
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-checksums: dist/checksums.txt
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           fail_on_unmatched_files: true
           files: |
