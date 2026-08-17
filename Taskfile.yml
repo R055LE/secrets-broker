@@ -36,6 +36,8 @@ tasks:
 
   test:
     desc: Run the hermetic unit test suite (no KWallet/kdialog/bws required)
+    env:
+      CGO_ENABLED: '1'
     cmds:
       - go test ./... -race -count=1
 
@@ -45,6 +47,8 @@ tasks:
       secrets-broker account. Requires SECRETS_BROKER_TEST_TOKEN_FILE,
       SECRETS_BROKER_TEST_PROJECT_ID, and SECRETS_BROKER_TEST_SECRET_NAME env vars
       (SECRETS_BROKER_TEST_SECRET_VALUE optional); tests skip cleanly if unset.
+    env:
+      CGO_ENABLED: '1'
     cmds:
       - go test -tags=integration ./... -race -count=1
 
