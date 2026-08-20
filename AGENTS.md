@@ -84,3 +84,9 @@ The integration runner path also requires the isolated worker and runner sudoers
   Tailscale ACLs. Do not add same-host deployment guidance or merge the ports.
 - Relay handlers deliberately do not authenticate callers. Preserve body and state limits, ID
   validation, listener validation, timeouts, browser headers, and same-origin form checks.
+
+## Claude Code specifics
+
+`CLAUDE.md` is a symlink to this file, per `R055LE/runbook` `decisions/0012`.
+Fleet-wide conventions — the symlink mechanics, the PR/merge recipe — live
+in the mirror root's `AGENTS.md`, see `decisions/0023`.
