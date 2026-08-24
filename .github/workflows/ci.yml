@@ -146,6 +146,20 @@ jobs:
           test "$(sudo stat -c '%U:%G:%a' /etc/secrets-broker/policy.toml)" = "root:secrets-broker:640"
           sudo /usr/local/sbin/secrets-broker-admin projects set-approval agent-project confirm
           sudo grep -Fq 'approval = "allowlisted-prompt"' /etc/secrets-broker/policy.toml
+
+          sudo /usr/local/sbin/secrets-broker-admin projects allowlist list agent-project \
+            | grep -Fq '["/usr/bin/printenv","TEST_SECRET_NAME"]'
+          sudo /usr/local/sbin/secrets-broker-admin projects allowlist add agent-project -- \
+            /usr/bin/true --ci-allowlist-test
+          test "$(sudo grep -Fc 'argv = ["/usr/bin/true","--ci-allowlist-test"]' /etc/secrets-broker/policy.toml)" = 1
+          sudo /usr/local/sbin/secrets-broker-admin projects allowlist add agent-project -- \
+            /usr/bin/true --ci-allowlist-test \
+            | grep -Fq 'already allows'
+          test "$(sudo grep -Fc 'argv = ["/usr/bin/true","--ci-allowlist-test"]' /etc/secrets-broker/policy.toml)" = 1
+          sudo /usr/local/sbin/secrets-broker-admin projects allowlist remove agent-project -- \
+            /usr/bin/true --ci-allowlist-test
+          test "$(sudo grep -Fc 'argv = ["/usr/bin/true","--ci-allowlist-test"]' /etc/secrets-broker/policy.toml)" = 0
+          test "$(sudo stat -c '%U:%G:%a' /etc/secrets-broker/policy.toml)" = "root:secrets-broker:640"
           sudo "$release_root/deploy/install-worker.sh" check --client-user runner
 
           sudo /bin/sh -c 'printf "\n# preserved by installer test\n" >> /etc/secrets-broker/policy.toml'

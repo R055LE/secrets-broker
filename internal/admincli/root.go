@@ -3,6 +3,7 @@ package admincli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -16,7 +17,10 @@ const policyPath = "/etc/secrets-broker/policy.toml"
 
 type projectEditor interface {
 	ListProjects() ([]admin.ProjectSummary, error)
+	ListAllowlist(alias string) ([][]string, error)
 	SetApproval(alias, mode string) (bool, error)
+	AddAllowlist(alias string, argv []string) (bool, error)
+	RemoveAllowlist(alias string, argv []string) (bool, error)
 }
 
 func Execute() int {
@@ -86,6 +90,75 @@ func newRootCommand(euid func() int, editor projectEditor, stdout io.Writer) *co
 			return nil
 		},
 	})
+
+	allowlist := &cobra.Command{
+		Use:   "allowlist",
+		Short: "List and update exact argv allowed for a project",
+	}
+	allowlist.AddCommand(&cobra.Command{
+		Use:   "list ALIAS",
+		Short: "List a project's exact argv allowlist",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			entries, err := editor.ListAllowlist(args[0])
+			if err != nil {
+				return err
+			}
+			writer := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+			_, _ = fmt.Fprintln(writer, "INDEX\tARGV")
+			for i, argv := range entries {
+				encoded, err := json.Marshal(argv)
+				if err != nil {
+					return fmt.Errorf("encoding allowlist argv: %w", err)
+				}
+				_, _ = fmt.Fprintf(writer, "%d\t%s\n", i+1, encoded)
+			}
+			return writer.Flush()
+		},
+	})
+	allowlist.AddCommand(&cobra.Command{
+		Use:   "add ALIAS -- ARGV...",
+		Short: "Add one exact argv entry to a project",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			changed, err := editor.AddAllowlist(args[0], args[1:])
+			if err != nil {
+				return err
+			}
+			encoded, err := json.Marshal(args[1:])
+			if err != nil {
+				return fmt.Errorf("encoding allowlist argv: %w", err)
+			}
+			if changed {
+				_, _ = fmt.Fprintf(stdout, "Project %q now allows %s.\n", args[0], encoded)
+			} else {
+				_, _ = fmt.Fprintf(stdout, "Project %q already allows %s.\n", args[0], encoded)
+			}
+			return nil
+		},
+	})
+	allowlist.AddCommand(&cobra.Command{
+		Use:   "remove ALIAS -- ARGV...",
+		Short: "Remove an exact argv entry from a project",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			changed, err := editor.RemoveAllowlist(args[0], args[1:])
+			if err != nil {
+				return err
+			}
+			encoded, err := json.Marshal(args[1:])
+			if err != nil {
+				return fmt.Errorf("encoding allowlist argv: %w", err)
+			}
+			if changed {
+				_, _ = fmt.Fprintf(stdout, "Project %q no longer allows %s.\n", args[0], encoded)
+			} else {
+				_, _ = fmt.Fprintf(stdout, "Project %q did not allow %s.\n", args[0], encoded)
+			}
+			return nil
+		},
+	})
+	projects.AddCommand(allowlist)
 	root.AddCommand(projects)
 	return root
 }
