@@ -139,10 +139,16 @@ jobs:
             'umask 077; printf %s ci-only-placeholder > /var/lib/secrets-broker/bws-access-token'
           sudo "$release_root/deploy/install-worker.sh" check --client-user runner
           sudo test ! -e /var/log/secrets-broker/audit.jsonl
+          sudo test ! -e /var/log/secrets-broker-admin/audit.jsonl
 
           sudo /usr/local/sbin/secrets-broker-admin projects list | grep -Fq agent-project
+          sudo test ! -e /var/log/secrets-broker-admin/audit.jsonl
           sudo /usr/local/sbin/secrets-broker-admin projects set-approval agent-project automatic
           sudo grep -Fq 'approval = "never"' /etc/secrets-broker/policy.toml
+          test "$(sudo stat -c '%U:%G:%a' /var/log/secrets-broker-admin/audit.jsonl)" = "root:root:600"
+          sudo grep -Fq '"operation":"set_approval"' /var/log/secrets-broker-admin/audit.jsonl
+          sudo grep -Fq '"outcome":"changed"' /var/log/secrets-broker-admin/audit.jsonl
+          ! sudo grep -Eq 'token|bws_project_id|secret' /var/log/secrets-broker-admin/audit.jsonl
           test "$(sudo stat -c '%U:%G:%a' /etc/secrets-broker/policy.toml)" = "root:secrets-broker:640"
           sudo /usr/local/sbin/secrets-broker-admin projects set-approval agent-project confirm
           sudo grep -Fq 'approval = "allowlisted-prompt"' /etc/secrets-broker/policy.toml
@@ -155,6 +161,7 @@ jobs:
           sudo /usr/local/sbin/secrets-broker-admin projects allowlist add agent-project -- \
             /usr/bin/true --ci-allowlist-test \
             | grep -Fq 'already allows'
+          sudo grep -Fq '"outcome":"no_change"' /var/log/secrets-broker-admin/audit.jsonl
           test "$(sudo grep -Fc 'argv = ["/usr/bin/true","--ci-allowlist-test"]' /etc/secrets-broker/policy.toml)" = 1
           sudo /usr/local/sbin/secrets-broker-admin projects allowlist remove agent-project -- \
             /usr/bin/true --ci-allowlist-test
@@ -184,11 +191,18 @@ jobs:
             'umask 077; printf "%s\n" ci-audit-record > /var/log/secrets-broker/audit.jsonl'
           sudo logrotate --force --state "$test_dir/logrotate.status" /etc/logrotate.d/secrets-broker
           sudo test ! -s /var/log/secrets-broker/audit.jsonl
+          sudo test ! -s /var/log/secrets-broker-admin/audit.jsonl
           test "$(sudo stat -c '%U:%G:%a' /var/log/secrets-broker/audit.jsonl)" = "secrets-broker:secrets-broker:600"
           test "$(sudo stat -c '%U:%G:%a' /var/log/secrets-broker/audit.jsonl.1)" = "secrets-broker:secrets-broker:600"
+          test "$(sudo stat -c '%U:%G:%a' /var/log/secrets-broker-admin/audit.jsonl)" = "root:root:600"
+          test "$(sudo stat -c '%U:%G:%a' /var/log/secrets-broker-admin/audit.jsonl.1)" = "root:root:600"
           sudo grep -Fxq ci-audit-record /var/log/secrets-broker/audit.jsonl.1
+          sudo grep -Fq '"operation":"set_approval"' /var/log/secrets-broker-admin/audit.jsonl.1
           sudo -u runner test ! -r /var/log/secrets-broker/audit.jsonl.1
           sudo -u secrets-broker-runner test ! -r /var/log/secrets-broker/audit.jsonl.1
+          sudo -u runner test ! -r /var/log/secrets-broker-admin/audit.jsonl.1
+          sudo -u secrets-broker test ! -r /var/log/secrets-broker-admin/audit.jsonl.1
+          sudo -u secrets-broker-runner test ! -r /var/log/secrets-broker-admin/audit.jsonl.1
 
       - name: Install and check relay service
         run: |
