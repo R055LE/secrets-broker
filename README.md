@@ -178,6 +178,20 @@ worker policy, and atomically replaces the file while preserving its owner, grou
 A failed validation leaves the original policy in place. Approval edits require the existing
 array-of-tables policy layout, and allowlist removal also requires each `argv` field on one line.
 
+Every requested approval or allowlist mutation writes a root-owned audit start record before the
+policy editor runs, followed by a `changed`, `no_change`, or `failed` finish record. A failed start
+record prevents the policy operation. If the policy replacement succeeds but the finish record
+fails, the command reports that the policy changed and leaves the unmatched start record for
+recovery. Read-only administrator commands do not write this log.
+
+Administrator audit records contain the effective UID, project alias, operation, requested
+approval mode or a SHA-256 digest and count of the exact argv, outcome, timestamps, and a
+correlation ID. They do not contain raw argv, policy contents, BWS project ID, token, secret names,
+secret values, or raw failure text. The fixed administrator audit path is
+`/var/log/secrets-broker-admin/audit.jsonl`, owned by `root:root` and separate from the worker-owned
+execution audit. See
+[ADR-0017](decisions/0017-root-owned-administrator-mutation-audit.md).
+
 The check validates accounts, group membership, ACLs, fixed paths, ownership, modes, sudoers
 syntax, template completion, and installed CLI, `bws`, and sudo versions. It also invokes the
 worker's reserved `check` mode as the worker account. That mode parses and validates the policy,
@@ -185,13 +199,14 @@ runtime paths, project working directories, and token metadata. It does not read
 token, contact the relay, invoke `bws`, run a project command, request an approval, or write an
 audit record.
 
-The root-owned logrotate policy checks the audit file daily and rotates it early when it exceeds
-10 MiB. It retains 30 rotations, compresses older files after one cycle, and creates each new
-active log as `secrets-broker:secrets-broker` mode `0600`. Rotation renames the file instead of
-copying and truncating it. The worker opens the fixed audit path for every record, so it needs no
-reload. A rotation between a run's start and finish records can place them in adjacent files; the
-shared run ID still correlates the pair. The 10 MiB threshold is evaluated when the host's
-logrotate schedule runs, so it is not a real-time disk quota.
+The root-owned logrotate policy checks both audit files daily and rotates either one early when it
+exceeds 10 MiB. It retains 30 rotations and compresses older files after one cycle. New worker logs
+are `secrets-broker:secrets-broker` mode `0600`; new administrator logs are `root:root` mode `0600`.
+Rotation renames each file instead of copying and truncating it. Each operation opens its fixed
+audit path for every record, so neither process needs a reload. A rotation between start and finish
+records can place them in adjacent files; the shared ID still correlates the pair. The 10 MiB
+threshold is evaluated when the host's logrotate schedule runs, so it is not a real-time disk
+quota.
 
 Install the relay on a separate Tailscale device. Start from the example and replace both values
 with that device's literal Tailscale IPv4 address:

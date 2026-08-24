@@ -20,6 +20,8 @@ readonly SUDOERS_TARGET=/etc/sudoers.d/secrets-broker
 readonly LOGROTATE_TARGET=/etc/logrotate.d/secrets-broker
 readonly AUDIT_DIR=/var/log/secrets-broker
 readonly AUDIT_FILE=/var/log/secrets-broker/audit.jsonl
+readonly ADMIN_AUDIT_DIR=/var/log/secrets-broker-admin
+readonly ADMIN_AUDIT_FILE=/var/log/secrets-broker-admin/audit.jsonl
 readonly TOKEN_FILE=/var/lib/secrets-broker/bws-access-token
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -267,6 +269,7 @@ install_worker() {
   install -d -o "$RUNNER_USER" -g "$RUNNER_USER" -m 0700 "$RUNNER_HOME"
   install -d -o root -g root -m 0755 /etc/secrets-broker
   install -d -o "$WORKER_USER" -g "$WORKER_USER" -m 0700 "$AUDIT_DIR"
+  install -d -o root -g root -m 0700 "$ADMIN_AUDIT_DIR"
 
   install -D -o root -g root -m 0755 "$cli_source" "$CLI_TARGET"
   install -D -o root -g root -m 0755 "$admin_source" "$ADMIN_TARGET"
@@ -336,6 +339,7 @@ check_worker() {
   check_directory "$RUNNER_HOME" "$RUNNER_USER" "$RUNNER_USER" 700
   check_directory /etc/secrets-broker root root 755
   check_directory "$AUDIT_DIR" "$WORKER_USER" "$WORKER_USER" 700
+  check_directory "$ADMIN_AUDIT_DIR" root root 700
   check_regular_file "$CLI_TARGET" root root 755
   check_regular_file "$ADMIN_TARGET" root root 755
   check_regular_file "$WORKER_TARGET" root root 755
@@ -353,6 +357,9 @@ check_worker() {
   (( token_size > 0 && token_size <= 65536 )) || fail "$TOKEN_FILE must be non-empty and no larger than 65536 bytes"
   if [[ -e "$AUDIT_FILE" || -L "$AUDIT_FILE" ]]; then
     check_regular_file "$AUDIT_FILE" "$WORKER_USER" "$WORKER_USER" 600
+  fi
+  if [[ -e "$ADMIN_AUDIT_FILE" || -L "$ADMIN_AUDIT_FILE" ]]; then
+    check_regular_file "$ADMIN_AUDIT_FILE" root root 600
   fi
 
   ! grep -Eq 'PASTE-|YOUR-' "$POLICY_TARGET" || fail "$POLICY_TARGET still contains template placeholders"
@@ -378,7 +385,7 @@ check_worker() {
   note "bws: ${bws_version%%$'\n'*}"
   note "sudo: $sudo_version"
   note "Token metadata: owner and mode valid, $token_size bytes."
-  note "Audit rotation: daily, 10 MiB threshold, 30 retained rotations."
+  note "Worker and administrator audit rotation: daily, 10 MiB threshold, 30 retained rotations."
 }
 
 case "$mode" in

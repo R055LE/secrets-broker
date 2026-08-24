@@ -13,7 +13,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const policyPath = "/etc/secrets-broker/policy.toml"
+const (
+	policyPath     = "/etc/secrets-broker/policy.toml"
+	adminAuditPath = "/var/log/secrets-broker-admin/audit.jsonl"
+)
 
 type projectEditor interface {
 	ListProjects() ([]admin.ProjectSummary, error)
@@ -24,7 +27,9 @@ type projectEditor interface {
 }
 
 func Execute() int {
-	editor := admin.NewEditor(policyPath, 0)
+	policyEditor := admin.NewEditor(policyPath, 0)
+	auditLogger := admin.NewMutationJSONLLogger(adminAuditPath)
+	editor := admin.NewAuditedEditor(policyEditor, auditLogger, os.Geteuid())
 	return execute(os.Geteuid, editor, os.Args[1:], os.Stdout, os.Stderr)
 }
 
