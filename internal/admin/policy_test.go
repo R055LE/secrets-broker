@@ -1,9 +1,11 @@
 package admin
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -144,6 +146,187 @@ func TestSetApprovalRejectsUnknownProjectAndModeWithoutWriting(t *testing.T) {
 	}
 }
 
+func TestListAllowlistReturnsExactArgv(t *testing.T) {
+	path := writePolicy(t, policyWithProjects(projectBlockWithAllow(
+		"alpha",
+		`approval = "allowlisted-prompt"`,
+		[]string{"/usr/bin/true"},
+		[]string{"/usr/bin/printf", "hello world", ""},
+	)))
+
+	got, err := NewEditor(path, uint32(os.Geteuid())).ListAllowlist("alpha")
+	if err != nil {
+		t.Fatalf("ListAllowlist: %v", err)
+	}
+	want := [][]string{{"/usr/bin/true"}, {"/usr/bin/printf", "hello world", ""}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("allowlist = %#v, want %#v", got, want)
+	}
+	if _, err := NewEditor(path, uint32(os.Geteuid())).ListAllowlist("missing"); err == nil || !strings.Contains(err.Error(), "unknown project") {
+		t.Fatalf("unknown project error = %v", err)
+	}
+}
+
+func TestAddAllowlistChangesOnlySelectedProjectAndPreservesMetadata(t *testing.T) {
+	contents := policyWithProjects(
+		projectBlockWithAllow("alpha", `approval = "allowlisted-prompt"`, []string{"/usr/bin/true"}),
+		projectBlockWithAllow("beta", `approval = "never"`, []string{"/usr/bin/false"}),
+	) + "# keep trailing comment\n"
+	path := writePolicy(t, contents)
+	before := statFile(t, path)
+	argv := []string{"/usr/bin/printf", "hello world", `quote"and\\slash`}
+
+	changed, err := NewEditor(path, uint32(os.Geteuid())).AddAllowlist("alpha", argv)
+	if err != nil {
+		t.Fatalf("AddAllowlist: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected policy to change")
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("loading updated policy: %v", err)
+	}
+	if got, want := cfg.Projects[0].AllowArgv(), [][]string{{"/usr/bin/true"}, argv}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("alpha allowlist = %#v, want %#v", got, want)
+	}
+	if got, want := cfg.Projects[1].AllowArgv(), [][]string{{"/usr/bin/false"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("beta allowlist = %#v, want %#v", got, want)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading updated policy: %v", err)
+	}
+	if !strings.Contains(string(data), "# keep trailing comment") {
+		t.Fatal("unrelated comment was not preserved")
+	}
+	assertMetadataPreserved(t, before, statFile(t, path))
+}
+
+func TestAddAllowlistDuplicateDoesNotRewrite(t *testing.T) {
+	path := writePolicy(t, policyWithProjects(projectBlock("alpha", `approval = "never"`)))
+	before := statFile(t, path)
+
+	changed, err := NewEditor(path, uint32(os.Geteuid())).AddAllowlist("alpha", []string{"/usr/bin/true"})
+	if err != nil {
+		t.Fatalf("AddAllowlist: %v", err)
+	}
+	if changed {
+		t.Fatal("expected unchanged policy")
+	}
+	if after := statFile(t, path); before.Ino != after.Ino {
+		t.Fatal("duplicate add replaced the policy file")
+	}
+}
+
+func TestRemoveAllowlistRemovesEveryExactDuplicateOnly(t *testing.T) {
+	target := []string{"/usr/bin/tool", "read"}
+	contents := policyWithProjects(
+		projectBlockWithAllow(
+			"alpha",
+			`approval = "allowlisted-prompt"`,
+			target,
+			[]string{"/usr/bin/tool", "read", "--verbose"},
+			target,
+		),
+		projectBlockWithAllow("beta", `approval = "never"`, target),
+	)
+	contents = strings.Replace(contents, "  [[projects.allow]]\n", "  # keep allowlist note\n  [[projects.allow]]\n", 1)
+	path := writePolicy(t, contents)
+	before := statFile(t, path)
+
+	changed, err := NewEditor(path, uint32(os.Geteuid())).RemoveAllowlist("alpha", target)
+	if err != nil {
+		t.Fatalf("RemoveAllowlist: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected policy to change")
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("loading updated policy: %v", err)
+	}
+	if got, want := cfg.Projects[0].AllowArgv(), [][]string{{"/usr/bin/tool", "read", "--verbose"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("alpha allowlist = %#v, want %#v", got, want)
+	}
+	if got, want := cfg.Projects[1].AllowArgv(), [][]string{target}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("beta allowlist = %#v, want %#v", got, want)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading updated policy: %v", err)
+	}
+	if !strings.Contains(string(data), "# keep allowlist note") {
+		t.Fatal("allowlist comment was not preserved")
+	}
+	assertMetadataPreserved(t, before, statFile(t, path))
+}
+
+func TestRemoveAllowlistMissingEntryDoesNotRewrite(t *testing.T) {
+	path := writePolicy(t, policyWithProjects(projectBlock("alpha", `approval = "never"`)))
+	before := statFile(t, path)
+
+	changed, err := NewEditor(path, uint32(os.Geteuid())).RemoveAllowlist("alpha", []string{"/usr/bin/false"})
+	if err != nil {
+		t.Fatalf("RemoveAllowlist: %v", err)
+	}
+	if changed {
+		t.Fatal("expected unchanged policy")
+	}
+	if after := statFile(t, path); before.Ino != after.Ino {
+		t.Fatal("missing remove replaced the policy file")
+	}
+}
+
+func TestRemoveAllowlistSupportsEmptyResult(t *testing.T) {
+	path := writePolicy(t, policyWithProjects(projectBlock("alpha", `approval = "never"`)))
+
+	changed, err := NewEditor(path, uint32(os.Geteuid())).RemoveAllowlist("alpha", []string{"/usr/bin/true"})
+	if err != nil {
+		t.Fatalf("RemoveAllowlist: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected policy to change")
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("loading updated policy: %v", err)
+	}
+	if len(cfg.Projects[0].Allow) != 0 {
+		t.Fatalf("allowlist = %#v, want empty", cfg.Projects[0].AllowArgv())
+	}
+}
+
+func TestAllowlistMutationsRejectEmptyArgv(t *testing.T) {
+	editor := NewEditor("unused", uint32(os.Geteuid()))
+	if _, err := editor.AddAllowlist("alpha", nil); err == nil || !strings.Contains(err.Error(), "must not be empty") {
+		t.Fatalf("AddAllowlist error = %v", err)
+	}
+	if _, err := editor.RemoveAllowlist("alpha", nil); err == nil || !strings.Contains(err.Error(), "must not be empty") {
+		t.Fatalf("RemoveAllowlist error = %v", err)
+	}
+}
+
+func TestRemoveAllowlistRejectsUnsupportedLayoutWithoutWriting(t *testing.T) {
+	contents := policyWithProjects(projectBlock("alpha", `approval = "never"`))
+	contents = strings.Replace(contents, `argv = ["/usr/bin/true"]`, "argv = [\n    \"/usr/bin/true\",\n  ]", 1)
+	path := writePolicy(t, contents)
+
+	_, err := NewEditor(path, uint32(os.Geteuid())).RemoveAllowlist("alpha", []string{"/usr/bin/true"})
+	if err == nil {
+		t.Fatal("expected unsupported layout to be rejected")
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("reading policy: %v", readErr)
+	}
+	if string(data) != contents {
+		t.Fatal("rejected update changed the policy")
+	}
+}
+
 func TestEditorRejectsSymlinkAndUnexpectedOwner(t *testing.T) {
 	path := writePolicy(t, policyWithProjects(projectBlock("alpha", `approval = "never"`)))
 	symlink := filepath.Join(filepath.Dir(path), "policy-link.toml")
@@ -198,6 +381,16 @@ func statFile(t *testing.T, path string) *syscall.Stat_t {
 	return stat
 }
 
+func assertMetadataPreserved(t *testing.T, before, after *syscall.Stat_t) {
+	t.Helper()
+	if before.Uid != after.Uid || before.Gid != after.Gid {
+		t.Fatalf("ownership changed from %d:%d to %d:%d", before.Uid, before.Gid, after.Uid, after.Gid)
+	}
+	if os.FileMode(before.Mode).Perm() != os.FileMode(after.Mode).Perm() {
+		t.Fatalf("mode changed from %v to %v", os.FileMode(before.Mode).Perm(), os.FileMode(after.Mode).Perm())
+	}
+}
+
 func policyWithProjects(projects ...string) string {
 	return `[runtime]
 bws_binary = "/usr/local/bin/bws"
@@ -222,17 +415,26 @@ timeout_seconds = 300
 }
 
 func projectBlock(alias, approvalLine string) string {
+	return projectBlockWithAllow(alias, approvalLine, []string{"/usr/bin/true"})
+}
+
+func projectBlockWithAllow(alias, approvalLine string, entries ...[]string) string {
 	approval := ""
 	if approvalLine != "" {
 		approval = approvalLine + "\n"
 	}
-	return fmt.Sprintf(`[[projects]]
+	block := fmt.Sprintf(`[[projects]]
 alias = %q
 bws_project_id = "00000000-0000-0000-0000-000000000000"
 token_entry = %q
 working_dir = "/tmp"
-%s
-  [[projects.allow]]
-  argv = ["/usr/bin/true"]
-`, alias, alias, approval)
+%s`, alias, alias, approval)
+	for _, argv := range entries {
+		encoded, err := json.Marshal(argv)
+		if err != nil {
+			panic(err)
+		}
+		block += fmt.Sprintf("\n  [[projects.allow]]\n  argv = %s\n", encoded)
+	}
+	return block
 }

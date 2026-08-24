@@ -3,6 +3,7 @@ package admincli
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -15,6 +16,8 @@ type fakeProjectEditor struct {
 	err      error
 	alias    string
 	mode     string
+	allow    [][]string
+	argv     []string
 	calls    int
 }
 
@@ -27,6 +30,26 @@ func (f *fakeProjectEditor) SetApproval(alias, mode string) (bool, error) {
 	f.calls++
 	f.alias = alias
 	f.mode = mode
+	return f.changed, f.err
+}
+
+func (f *fakeProjectEditor) ListAllowlist(alias string) ([][]string, error) {
+	f.calls++
+	f.alias = alias
+	return f.allow, f.err
+}
+
+func (f *fakeProjectEditor) AddAllowlist(alias string, argv []string) (bool, error) {
+	f.calls++
+	f.alias = alias
+	f.argv = argv
+	return f.changed, f.err
+}
+
+func (f *fakeProjectEditor) RemoveAllowlist(alias string, argv []string) (bool, error) {
+	f.calls++
+	f.alias = alias
+	f.argv = argv
 	return f.changed, f.err
 }
 
@@ -70,6 +93,55 @@ func TestProjectsSetApprovalReportsNoOp(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "already uses confirm") {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestProjectsAllowlistList(t *testing.T) {
+	editor := &fakeProjectEditor{allow: [][]string{
+		{"/usr/bin/true"},
+		{"/usr/bin/printf", "hello world"},
+	}}
+	var stdout, stderr bytes.Buffer
+
+	if code := execute(func() int { return 0 }, editor, []string{"projects", "allowlist", "list", "omada-read"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if editor.alias != "omada-read" {
+		t.Fatalf("ListAllowlist called with %q", editor.alias)
+	}
+	for _, want := range []string{"INDEX", `["/usr/bin/true"]`, `["/usr/bin/printf","hello world"]`} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestProjectsAllowlistAddPreservesArgvAfterSeparator(t *testing.T) {
+	editor := &fakeProjectEditor{changed: true}
+	var stdout, stderr bytes.Buffer
+	args := []string{"projects", "allowlist", "add", "omada-read", "--", "/usr/bin/tool", "--flag", "hello world", ""}
+
+	if code := execute(func() int { return 0 }, editor, args, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	want := []string{"/usr/bin/tool", "--flag", "hello world", ""}
+	if !reflect.DeepEqual(editor.argv, want) {
+		t.Fatalf("AddAllowlist argv = %#v, want %#v", editor.argv, want)
+	}
+	if !strings.Contains(stdout.String(), `now allows ["/usr/bin/tool","--flag","hello world",""]`) {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestProjectsAllowlistRemoveReportsNoOp(t *testing.T) {
+	editor := &fakeProjectEditor{}
+	var stdout, stderr bytes.Buffer
+
+	if code := execute(func() int { return 0 }, editor, []string{"projects", "allowlist", "remove", "omada-read", "--", "/usr/bin/true"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `did not allow ["/usr/bin/true"]`) {
 		t.Fatalf("unexpected output: %q", stdout.String())
 	}
 }

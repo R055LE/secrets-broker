@@ -3,12 +3,14 @@ package admin
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"syscall"
 
 	"github.com/R055LE/secrets-broker/internal/config"
@@ -26,6 +28,7 @@ var (
 	projectHeaderPattern = regexp.MustCompile(`(?m)^[\t ]*\[\[projects\]\][\t ]*(?:#[^\r\n]*)?\r?$`)
 	allowHeaderPattern   = regexp.MustCompile(`(?m)^[\t ]*\[\[projects\.allow\]\][\t ]*(?:#[^\r\n]*)?\r?$`)
 	approvalPattern      = regexp.MustCompile(`(?m)^([\t ]*approval[\t ]*=[\t ]*)(?:"(?:\\.|[^"\\\r\n])*"|'[^'\r\n]*')([\t ]*(?:#[^\r\n]*)?\r?)$`)
+	argvPattern          = regexp.MustCompile(`(?m)^[\t ]*argv[\t ]*=[^\r\n]*\r?$`)
 )
 
 type ProjectSummary struct {
@@ -57,6 +60,19 @@ func (e *Editor) ListProjects() ([]ProjectSummary, error) {
 	return projects, nil
 }
 
+func (e *Editor) ListAllowlist(alias string) ([][]string, error) {
+	_, cfg, _, err := e.readPolicy()
+	if err != nil {
+		return nil, err
+	}
+
+	projectIndex, err := findProject(cfg, alias)
+	if err != nil {
+		return nil, err
+	}
+	return cloneArgv(cfg.Projects[projectIndex].Allow), nil
+}
+
 func (e *Editor) SetApproval(alias, mode string) (bool, error) {
 	approval, err := storedApproval(mode)
 	if err != nil {
@@ -68,15 +84,9 @@ func (e *Editor) SetApproval(alias, mode string) (bool, error) {
 		return false, err
 	}
 
-	projectIndex := -1
-	for i, project := range cfg.Projects {
-		if project.Alias == alias {
-			projectIndex = i
-			break
-		}
-	}
-	if projectIndex < 0 {
-		return false, fmt.Errorf("unknown project %q", alias)
+	projectIndex, err := findProject(cfg, alias)
+	if err != nil {
+		return false, err
 	}
 	if cfg.Projects[projectIndex].Approval == approval {
 		return false, nil
@@ -101,6 +111,87 @@ func (e *Editor) SetApproval(alias, mode string) (bool, error) {
 		return false, errors.New("updated policy changed fields outside the selected approval mode")
 	}
 
+	if err := e.writeAtomic(updated, metadata); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (e *Editor) AddAllowlist(alias string, argv []string) (bool, error) {
+	if len(argv) == 0 {
+		return false, errors.New("allowlist argv must not be empty")
+	}
+
+	data, cfg, metadata, err := e.readPolicy()
+	if err != nil {
+		return false, err
+	}
+	projectIndex, err := findProject(cfg, alias)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range cfg.Projects[projectIndex].Allow {
+		if slices.Equal(entry.Argv, argv) {
+			return false, nil
+		}
+	}
+
+	updated, err := insertAllowEntry(
+		data,
+		len(cfg.Projects),
+		projectIndex,
+		len(cfg.Projects[projectIndex].Allow),
+		argv,
+	)
+	if err != nil {
+		return false, err
+	}
+	want := append([]config.AllowEntry(nil), cfg.Projects[projectIndex].Allow...)
+	want = append(want, config.AllowEntry{Argv: append([]string(nil), argv...)})
+	if err := validateAllowlistUpdate(updated, cfg, projectIndex, want); err != nil {
+		return false, err
+	}
+	if err := e.writeAtomic(updated, metadata); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (e *Editor) RemoveAllowlist(alias string, argv []string) (bool, error) {
+	if len(argv) == 0 {
+		return false, errors.New("allowlist argv must not be empty")
+	}
+
+	data, cfg, metadata, err := e.readPolicy()
+	if err != nil {
+		return false, err
+	}
+	projectIndex, err := findProject(cfg, alias)
+	if err != nil {
+		return false, err
+	}
+
+	allow := cfg.Projects[projectIndex].Allow
+	remove := make([]int, 0, 1)
+	var want []config.AllowEntry
+	for i, entry := range allow {
+		if slices.Equal(entry.Argv, argv) {
+			remove = append(remove, i)
+			continue
+		}
+		want = append(want, entry)
+	}
+	if len(remove) == 0 {
+		return false, nil
+	}
+
+	updated, err := removeAllowEntries(data, len(cfg.Projects), projectIndex, len(allow), remove)
+	if err != nil {
+		return false, err
+	}
+	if err := validateAllowlistUpdate(updated, cfg, projectIndex, want); err != nil {
+		return false, err
+	}
 	if err := e.writeAtomic(updated, metadata); err != nil {
 		return false, err
 	}
@@ -251,18 +342,9 @@ func (e *Editor) writeAtomic(data []byte, original fileMetadata) error {
 }
 
 func replaceApproval(data []byte, projectCount, projectIndex int, approval string) ([]byte, error) {
-	headers := projectHeaderPattern.FindAllIndex(data, -1)
-	if len(headers) != projectCount {
-		return nil, errors.New("policy layout is not editable: expected one [[projects]] block per project")
-	}
-	if projectIndex < 0 || projectIndex >= len(headers) {
-		return nil, errors.New("selected project is outside the editable policy layout")
-	}
-
-	start := headers[projectIndex][1]
-	end := len(data)
-	if projectIndex+1 < len(headers) {
-		end = headers[projectIndex+1][0]
+	start, end, err := projectBlockBounds(data, projectCount, projectIndex)
+	if err != nil {
+		return nil, err
 	}
 	block := data[start:end]
 	matches := approvalPattern.FindAllSubmatchIndex(block, -1)
@@ -297,6 +379,151 @@ func replaceApproval(data []byte, projectCount, projectIndex int, approval strin
 	updated = append(updated, line...)
 	updated = append(updated, data[insertAt:]...)
 	return updated, nil
+}
+
+func insertAllowEntry(data []byte, projectCount, projectIndex, allowCount int, argv []string) ([]byte, error) {
+	start, end, err := projectBlockBounds(data, projectCount, projectIndex)
+	if err != nil {
+		return nil, err
+	}
+	if got := len(allowHeaderPattern.FindAllIndex(data[start:end], -1)); got != allowCount {
+		return nil, errors.New("policy layout is not editable: expected one [[projects.allow]] block per allowlist entry")
+	}
+
+	encoded, err := json.Marshal(argv)
+	if err != nil {
+		return nil, fmt.Errorf("encoding allowlist argv: %w", err)
+	}
+	newline := []byte("\n")
+	if bytes.Contains(data, []byte("\r\n")) {
+		newline = []byte("\r\n")
+	}
+	entry := make([]byte, 0, len(encoded)+64)
+	if end > 0 && data[end-1] != '\n' {
+		entry = append(entry, newline...)
+	}
+	entry = append(entry, "  [[projects.allow]]"...)
+	entry = append(entry, newline...)
+	entry = append(entry, "  argv = "...)
+	entry = append(entry, encoded...)
+	entry = append(entry, newline...)
+
+	updated := make([]byte, 0, len(data)+len(entry))
+	updated = append(updated, data[:end]...)
+	updated = append(updated, entry...)
+	updated = append(updated, data[end:]...)
+	return updated, nil
+}
+
+type byteSpan struct {
+	start int
+	end   int
+}
+
+func removeAllowEntries(data []byte, projectCount, projectIndex, allowCount int, remove []int) ([]byte, error) {
+	start, end, err := projectBlockBounds(data, projectCount, projectIndex)
+	if err != nil {
+		return nil, err
+	}
+	block := data[start:end]
+	allowHeaders := allowHeaderPattern.FindAllIndex(block, -1)
+	if len(allowHeaders) != allowCount {
+		return nil, errors.New("policy layout is not editable: expected one [[projects.allow]] block per allowlist entry")
+	}
+
+	spans := make([]byteSpan, 0, len(remove)*2)
+	for _, index := range remove {
+		if index < 0 || index >= len(allowHeaders) {
+			return nil, errors.New("selected allowlist entry is outside the editable policy layout")
+		}
+		sectionEnd := len(block)
+		if index+1 < len(allowHeaders) {
+			sectionEnd = allowHeaders[index+1][0]
+		}
+		sectionStart := allowHeaders[index][1]
+		matches := argvPattern.FindAllIndex(block[sectionStart:sectionEnd], -1)
+		if len(matches) != 1 {
+			return nil, errors.New("policy layout is not editable: expected one single-line argv field per [[projects.allow]] block")
+		}
+
+		headerStart := start + allowHeaders[index][0]
+		headerEnd := consumeNewline(data, start+allowHeaders[index][1])
+		argvStart := start + sectionStart + matches[0][0]
+		argvEnd := consumeNewline(data, start+sectionStart+matches[0][1])
+		spans = append(spans, byteSpan{start: headerStart, end: headerEnd})
+		spans = append(spans, byteSpan{start: argvStart, end: argvEnd})
+	}
+
+	updated := make([]byte, 0, len(data))
+	cursor := 0
+	for _, span := range spans {
+		if span.start < cursor {
+			return nil, errors.New("selected allowlist entries overlap in the editable policy layout")
+		}
+		updated = append(updated, data[cursor:span.start]...)
+		cursor = span.end
+	}
+	updated = append(updated, data[cursor:]...)
+	return updated, nil
+}
+
+func projectBlockBounds(data []byte, projectCount, projectIndex int) (int, int, error) {
+	headers := projectHeaderPattern.FindAllIndex(data, -1)
+	if len(headers) != projectCount {
+		return 0, 0, errors.New("policy layout is not editable: expected one [[projects]] block per project")
+	}
+	if projectIndex < 0 || projectIndex >= len(headers) {
+		return 0, 0, errors.New("selected project is outside the editable policy layout")
+	}
+	end := len(data)
+	if projectIndex+1 < len(headers) {
+		end = headers[projectIndex+1][0]
+	}
+	return headers[projectIndex][1], end, nil
+}
+
+func consumeNewline(data []byte, index int) int {
+	if index < len(data) && data[index] == '\n' {
+		return index + 1
+	}
+	return index
+}
+
+func validateAllowlistUpdate(updated []byte, cfg *config.Config, projectIndex int, want []config.AllowEntry) error {
+	updatedConfig, err := config.Parse(updated)
+	if err != nil {
+		return fmt.Errorf("validating updated policy: %w", err)
+	}
+	if err := updatedConfig.ValidateWorker(); err != nil {
+		return fmt.Errorf("validating updated worker policy: %w", err)
+	}
+
+	expected := *cfg
+	expected.Projects = append([]config.Project(nil), cfg.Projects...)
+	expectedProject := cfg.Projects[projectIndex]
+	expectedProject.Allow = want
+	expected.Projects[projectIndex] = expectedProject
+	if !reflect.DeepEqual(&expected, updatedConfig) {
+		return errors.New("updated policy changed fields outside the selected project allowlist")
+	}
+	return nil
+}
+
+func findProject(cfg *config.Config, alias string) (int, error) {
+	for i, project := range cfg.Projects {
+		if project.Alias == alias {
+			return i, nil
+		}
+	}
+	return -1, fmt.Errorf("unknown project %q", alias)
+}
+
+func cloneArgv(entries []config.AllowEntry) [][]string {
+	argv := make([][]string, len(entries))
+	for i, entry := range entries {
+		argv[i] = append([]string(nil), entry.Argv...)
+	}
+	return argv
 }
 
 func storedApproval(mode string) (string, error) {

@@ -42,7 +42,9 @@ Existing `prompt` and `always` policies remain readable and are displayed as `pr
 - The agent-facing protocol and worker remain unchanged.
 - A malformed policy, unsupported TOML layout, symlink, writable parent directory, ownership
   mismatch, concurrent replacement, or failed validation prevents the write.
-- Project creation, allowlist changes, and secret writes remain manual. Secret entry will require a
-  separate write-capability design rather than broadening the worker's runtime credential.
+- Project creation and secret writes remain manual. Exact allowlist administration was added later
+  under the same root-only boundary in [ADR-0016](0016-root-only-allowlist-administration.md).
+  Secret entry will require a separate write-capability design rather than broadening the worker's
+  runtime credential.
 - The relay and its web dashboard stay in this repository. A native mobile client warrants a
   separate repository only when it has an independent toolchain, signing, and release lifecycle.

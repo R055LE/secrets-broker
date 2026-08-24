@@ -145,7 +145,7 @@ Run the read-only deployment check after policy and token provisioning:
 sudo deploy/install-worker.sh check --client-user "$USER"
 ```
 
-### Manage project approvals
+### Manage project policy
 
 The worker installer also installs `/usr/local/sbin/secrets-broker-admin`. It is a separate,
 root-only interface to the fixed worker policy; it is not available through the agent sudoers rule
@@ -155,6 +155,12 @@ and has no policy-path override.
 sudo secrets-broker-admin projects list
 sudo secrets-broker-admin projects set-approval omada-read confirm
 sudo secrets-broker-admin projects set-approval omada-read automatic
+
+sudo secrets-broker-admin projects allowlist list omada-read
+sudo secrets-broker-admin projects allowlist add omada-read -- \
+  /usr/local/libexec/secrets-broker-ops/omada-acl
+sudo secrets-broker-admin projects allowlist remove omada-read -- \
+  /usr/local/libexec/secrets-broker-ops/omada-acl
 ```
 
 `confirm` means an exact allowlist match still requires a live approval. `automatic` means an exact
@@ -162,9 +168,15 @@ allowlist match runs without a prompt; unlisted commands remain denied. The broa
 are shown as `prompt-unlisted` and `prompt-any` by `projects list`, but this command deliberately
 cannot select them.
 
-An update changes only the selected project's approval value, validates the complete worker policy,
-and atomically replaces the file while preserving its owner, group, and permissions. A failed
-validation leaves the original policy in place.
+Allowlist entries are argv arrays, not shell strings. `--` separates the administrator command from
+the exact argv being stored, including any arguments that begin with `-`. Adding an existing entry
+and removing a missing entry are safe no-ops. Removal clears every identical entry so a duplicate
+cannot leave the command allowed. These commands manage existing projects only.
+
+An update changes only the selected project's approval value or allowlist, validates the complete
+worker policy, and atomically replaces the file while preserving its owner, group, and permissions.
+A failed validation leaves the original policy in place. Approval edits require the existing
+array-of-tables policy layout, and allowlist removal also requires each `argv` field on one line.
 
 The check validates accounts, group membership, ACLs, fixed paths, ownership, modes, sudoers
 syntax, template completion, and installed CLI, `bws`, and sudo versions. It also invokes the
