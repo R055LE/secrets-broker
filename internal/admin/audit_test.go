@@ -33,6 +33,11 @@ func (f *fakeMutationEditor) ListAllowlist(string) ([][]string, error) {
 	return nil, nil
 }
 
+func (f *fakeMutationEditor) CreateProject(ProjectInput) (bool, error) {
+	f.calls++
+	return f.changed, f.err
+}
+
 func (f *fakeMutationEditor) SetApproval(string, string) (bool, error) {
 	f.calls++
 	return f.changed, f.err
@@ -91,6 +96,38 @@ func TestAuditedEditorRecordsApprovalMutation(t *testing.T) {
 		Project:      "omada-read",
 		Operation:    MutationSetApproval,
 		ApprovalMode: ModeAutomatic,
+	}
+	if !reflect.DeepEqual(logger.starts, []MutationStart{wantStart}) {
+		t.Fatalf("starts = %#v, want %#v", logger.starts, []MutationStart{wantStart})
+	}
+	if !reflect.DeepEqual(logger.finishes, []MutationFinish{{Outcome: MutationChanged}}) {
+		t.Fatalf("finishes = %#v", logger.finishes)
+	}
+}
+
+func TestAuditedEditorRecordsProjectCreationWithoutDeploymentIdentifiers(t *testing.T) {
+	editor := &fakeMutationEditor{changed: true}
+	logger := &fakeMutationLogger{}
+	audited := NewAuditedEditor(editor, logger, 0)
+	input := ProjectInput{
+		Alias:        "github-ops",
+		BWSProjectID: "11111111-1111-1111-1111-111111111111",
+		TokenEntry:   "github-ops-agent",
+		WorkingDir:   "/srv/github-ops",
+	}
+
+	changed, err := audited.CreateProject(input)
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if !changed || editor.calls != 1 {
+		t.Fatalf("changed = %v, editor calls = %d", changed, editor.calls)
+	}
+	wantStart := MutationStart{
+		ActorUID:     0,
+		Project:      input.Alias,
+		Operation:    MutationCreateProject,
+		ApprovalMode: ModeConfirm,
 	}
 	if !reflect.DeepEqual(logger.starts, []MutationStart{wantStart}) {
 		t.Fatalf("starts = %#v, want %#v", logger.starts, []MutationStart{wantStart})

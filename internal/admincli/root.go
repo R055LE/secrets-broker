@@ -21,6 +21,7 @@ const (
 type projectEditor interface {
 	ListProjects() ([]admin.ProjectSummary, error)
 	ListAllowlist(alias string) ([][]string, error)
+	CreateProject(input admin.ProjectInput) (bool, error)
 	SetApproval(alias, mode string) (bool, error)
 	AddAllowlist(alias string, argv []string) (bool, error)
 	RemoveAllowlist(alias string, argv []string) (bool, error)
@@ -78,6 +79,43 @@ func newRootCommand(euid func() int, editor projectEditor, stdout io.Writer) *co
 			return writer.Flush()
 		},
 	})
+	var createBWSProjectID string
+	var createTokenEntry string
+	var createWorkingDir string
+	create := &cobra.Command{
+		Use:   "create ALIAS",
+		Short: "Create a confirm-mode project with an empty allowlist",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if createBWSProjectID == "" {
+				return fmt.Errorf("--bws-project-id is required")
+			}
+			if createTokenEntry == "" {
+				return fmt.Errorf("--token-entry is required")
+			}
+			if createWorkingDir == "" {
+				return fmt.Errorf("--working-dir is required")
+			}
+			changed, err := editor.CreateProject(admin.ProjectInput{
+				Alias:        args[0],
+				BWSProjectID: createBWSProjectID,
+				TokenEntry:   createTokenEntry,
+				WorkingDir:   createWorkingDir,
+			})
+			if err != nil {
+				return err
+			}
+			if !changed {
+				return fmt.Errorf("project %q was not created", args[0])
+			}
+			_, _ = fmt.Fprintf(stdout, "Project %q created in confirm mode with an empty allowlist.\n", args[0])
+			return nil
+		},
+	}
+	create.Flags().StringVar(&createBWSProjectID, "bws-project-id", "", "Bitwarden Secrets Manager project ID")
+	create.Flags().StringVar(&createTokenEntry, "token-entry", "", "Bitwarden Secrets Manager access-token secret name")
+	create.Flags().StringVar(&createWorkingDir, "working-dir", "", "absolute allowed working directory")
+	projects.AddCommand(create)
 	projects.AddCommand(&cobra.Command{
 		Use:   "set-approval ALIAS MODE",
 		Short: "Set a project to automatic or confirm mode",

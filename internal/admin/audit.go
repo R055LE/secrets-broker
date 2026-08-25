@@ -17,6 +17,7 @@ import (
 )
 
 const (
+	MutationCreateProject   = "create_project"
 	MutationSetApproval     = "set_approval"
 	MutationAddAllowlist    = "add_allowlist"
 	MutationRemoveAllowlist = "remove_allowlist"
@@ -29,6 +30,7 @@ const (
 type ProjectEditor interface {
 	ListProjects() ([]ProjectSummary, error)
 	ListAllowlist(alias string) ([][]string, error)
+	CreateProject(input ProjectInput) (bool, error)
 	SetApproval(alias, mode string) (bool, error)
 	AddAllowlist(alias string, argv []string) (bool, error)
 	RemoveAllowlist(alias string, argv []string) (bool, error)
@@ -67,6 +69,17 @@ func (e *AuditedEditor) ListProjects() ([]ProjectSummary, error) {
 
 func (e *AuditedEditor) ListAllowlist(alias string) ([][]string, error) {
 	return e.editor.ListAllowlist(alias)
+}
+
+func (e *AuditedEditor) CreateProject(input ProjectInput) (bool, error) {
+	return e.mutate(MutationStart{
+		ActorUID:     e.actorUID,
+		Project:      input.Alias,
+		Operation:    MutationCreateProject,
+		ApprovalMode: ModeConfirm,
+	}, func() (bool, error) {
+		return e.editor.CreateProject(input)
+	})
 }
 
 func (e *AuditedEditor) SetApproval(alias, mode string) (bool, error) {

@@ -18,6 +18,7 @@ type fakeProjectEditor struct {
 	mode     string
 	allow    [][]string
 	argv     []string
+	input    admin.ProjectInput
 	calls    int
 }
 
@@ -30,6 +31,12 @@ func (f *fakeProjectEditor) SetApproval(alias, mode string) (bool, error) {
 	f.calls++
 	f.alias = alias
 	f.mode = mode
+	return f.changed, f.err
+}
+
+func (f *fakeProjectEditor) CreateProject(input admin.ProjectInput) (bool, error) {
+	f.calls++
+	f.input = input
 	return f.changed, f.err
 }
 
@@ -82,6 +89,73 @@ func TestProjectsSetApproval(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "now uses automatic") {
 		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestProjectsCreateRequiresExplicitInputsAndUsesSafeDefaults(t *testing.T) {
+	editor := &fakeProjectEditor{changed: true}
+	var stdout, stderr bytes.Buffer
+	args := []string{
+		"projects", "create", "github-ops",
+		"--bws-project-id", "11111111-1111-1111-1111-111111111111",
+		"--token-entry", "github-ops-agent",
+		"--working-dir", "/srv/github ops",
+	}
+
+	if code := execute(func() int { return 0 }, editor, args, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	want := admin.ProjectInput{
+		Alias:        "github-ops",
+		BWSProjectID: "11111111-1111-1111-1111-111111111111",
+		TokenEntry:   "github-ops-agent",
+		WorkingDir:   "/srv/github ops",
+	}
+	if !reflect.DeepEqual(editor.input, want) {
+		t.Fatalf("CreateProject input = %#v, want %#v", editor.input, want)
+	}
+	if !strings.Contains(stdout.String(), `created in confirm mode with an empty allowlist`) {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestProjectsCreateRejectsMissingInputBeforeEditor(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "BWS project ID",
+			args: []string{"projects", "create", "github-ops", "--token-entry", "entry", "--working-dir", "/srv/project"},
+			want: "--bws-project-id is required",
+		},
+		{
+			name: "token entry",
+			args: []string{"projects", "create", "github-ops", "--bws-project-id", "id", "--working-dir", "/srv/project"},
+			want: "--token-entry is required",
+		},
+		{
+			name: "working directory",
+			args: []string{"projects", "create", "github-ops", "--bws-project-id", "id", "--token-entry", "entry"},
+			want: "--working-dir is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			editor := &fakeProjectEditor{}
+			var stdout, stderr bytes.Buffer
+			if code := execute(func() int { return 0 }, editor, tt.args, &stdout, &stderr); code == 0 {
+				t.Fatal("expected command to fail")
+			}
+			if editor.calls != 0 {
+				t.Fatalf("editor called %d times", editor.calls)
+			}
+			if !strings.Contains(stderr.String(), tt.want) {
+				t.Fatalf("stderr = %q, want containing %q", stderr.String(), tt.want)
+			}
+		})
 	}
 }
 
@@ -178,6 +252,23 @@ func TestAdminDoesNotExposePolicyPathOverride(t *testing.T) {
 	for _, name := range []string{"policy", "config"} {
 		if root.Flags().Lookup(name) != nil || root.PersistentFlags().Lookup(name) != nil {
 			t.Fatalf("admin command must not expose --%s", name)
+		}
+	}
+}
+
+func TestProjectsCreateDoesNotExposeUnsafeDefaults(t *testing.T) {
+	root := newRootCommand(func() int { return 0 }, &fakeProjectEditor{}, &bytes.Buffer{})
+	projects, _, err := root.Find([]string{"projects"})
+	if err != nil {
+		t.Fatalf("finding projects command: %v", err)
+	}
+	create, _, err := projects.Find([]string{"create"})
+	if err != nil {
+		t.Fatalf("finding create command: %v", err)
+	}
+	for _, name := range []string{"approval", "allow", "allowlist", "secret", "policy", "config"} {
+		if create.Flags().Lookup(name) != nil || create.PersistentFlags().Lookup(name) != nil {
+			t.Fatalf("project creation must not expose --%s", name)
 		}
 	}
 }

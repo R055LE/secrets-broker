@@ -153,6 +153,10 @@ and has no policy-path override.
 
 ```bash
 sudo secrets-broker-admin projects list
+sudo secrets-broker-admin projects create github-ops \
+  --bws-project-id 00000000-0000-0000-0000-000000000000 \
+  --token-entry github-ops-agent \
+  --working-dir /home/YOUR-USER/code/YOUR-PROJECT
 sudo secrets-broker-admin projects set-approval omada-read confirm
 sudo secrets-broker-admin projects set-approval omada-read automatic
 
@@ -163,6 +167,11 @@ sudo secrets-broker-admin projects allowlist remove omada-read -- \
   /usr/local/libexec/secrets-broker-ops/omada-acl
 ```
 
+Project creation requires every deployment identifier and an absolute working directory. It always
+starts in `confirm` mode with an empty allowlist. Duplicate aliases and incomplete input are
+rejected. The command only changes the local worker policy; it does not create secrets, change the
+worker's BWS access token, or broaden that token's project grants.
+
 `confirm` means an exact allowlist match still requires a live approval. `automatic` means an exact
 allowlist match runs without a prompt; unlisted commands remain denied. The broader legacy modes
 are shown as `prompt-unlisted` and `prompt-any` by `projects list`, but this command deliberately
@@ -171,26 +180,30 @@ cannot select them.
 Allowlist entries are argv arrays, not shell strings. `--` separates the administrator command from
 the exact argv being stored, including any arguments that begin with `-`. Adding an existing entry
 and removing a missing entry are safe no-ops. Removal clears every identical entry so a duplicate
-cannot leave the command allowed. These commands manage existing projects only.
+cannot leave the command allowed. Allowlist and approval commands manage existing projects only.
 
-An update changes only the selected project's approval value or allowlist, validates the complete
-worker policy, and atomically replaces the file while preserving its owner, group, and permissions.
-A failed validation leaves the original policy in place. Approval edits require the existing
-array-of-tables policy layout, and allowlist removal also requires each `argv` field on one line.
+An update changes only the requested project field or appends one canonical project, validates the
+complete worker policy, and atomically replaces the file while preserving its owner, group, and
+permissions. A failed validation leaves the original policy in place. Approval edits require the
+existing array-of-tables policy layout, and allowlist removal also requires each `argv` field on one
+line.
 
-Every requested approval or allowlist mutation writes a root-owned audit start record before the
-policy editor runs, followed by a `changed`, `no_change`, or `failed` finish record. A failed start
-record prevents the policy operation. If the policy replacement succeeds but the finish record
-fails, the command reports that the policy changed and leaves the unmatched start record for
-recovery. Read-only administrator commands do not write this log.
+Every requested project creation, approval, or allowlist mutation writes a root-owned audit start
+record before the policy editor runs, followed by a `changed`, `no_change`, or `failed` finish
+record. A failed start record prevents the policy operation. If the policy replacement succeeds but
+the finish record fails, the command reports that the policy changed and leaves the unmatched start
+record for recovery. Read-only administrator commands do not write this log.
 
 Administrator audit records contain the effective UID, project alias, operation, requested
 approval mode or a SHA-256 digest and count of the exact argv, outcome, timestamps, and a
-correlation ID. They do not contain raw argv, policy contents, BWS project ID, token, secret names,
-secret values, or raw failure text. The fixed administrator audit path is
+correlation ID. Project creation records identify the alias, operation, and fixed `confirm` mode,
+but omit the supplied BWS project ID, token entry, and working directory. Records do not contain raw
+argv, policy contents, tokens, secret names, secret values, or raw failure text. The fixed
+administrator audit path is
 `/var/log/secrets-broker-admin/audit.jsonl`, owned by `root:root` and separate from the worker-owned
 execution audit. See
-[ADR-0017](decisions/0017-root-owned-administrator-mutation-audit.md).
+[ADR-0017](decisions/0017-root-owned-administrator-mutation-audit.md) and
+[ADR-0018](decisions/0018-safe-root-only-project-creation.md).
 
 The check validates accounts, group membership, ACLs, fixed paths, ownership, modes, sudoers
 syntax, template completion, and installed CLI, `bws`, and sudo versions. It also invokes the

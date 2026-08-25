@@ -39,6 +39,155 @@ func TestListProjectsUsesOperatorFacingModes(t *testing.T) {
 	}
 }
 
+func TestCreateProjectAddsOnlySafeProjectAndPreservesMetadata(t *testing.T) {
+	path := writePolicy(t, policyWithProjects(projectBlock("alpha", `approval = "never"`)))
+	beforeMetadata := statFile(t, path)
+	beforeConfig, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("loading original policy: %v", err)
+	}
+	input := ProjectInput{
+		Alias:        "beta",
+		BWSProjectID: "11111111-1111-1111-1111-111111111111",
+		TokenEntry:   "beta-agent",
+		WorkingDir:   "/srv/beta project",
+	}
+
+	changed, err := NewEditor(path, uint32(os.Geteuid())).CreateProject(input)
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected policy to change")
+	}
+
+	afterConfig, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("loading updated policy: %v", err)
+	}
+	if len(afterConfig.Projects) != 2 {
+		t.Fatalf("got %d projects, want 2", len(afterConfig.Projects))
+	}
+	if !reflect.DeepEqual(afterConfig.Projects[0], beforeConfig.Projects[0]) {
+		t.Fatalf("existing project changed:\n got: %#v\nwant: %#v", afterConfig.Projects[0], beforeConfig.Projects[0])
+	}
+	want := config.Project{
+		Alias:        input.Alias,
+		BWSProjectID: input.BWSProjectID,
+		TokenEntry:   input.TokenEntry,
+		WorkingDir:   input.WorkingDir,
+		Approval:     config.ApprovalAllowlistedPrompt,
+	}
+	if !reflect.DeepEqual(afterConfig.Projects[1], want) {
+		t.Fatalf("created project = %#v, want %#v", afterConfig.Projects[1], want)
+	}
+	assertMetadataPreserved(t, beforeMetadata, statFile(t, path))
+}
+
+func TestCreateProjectRejectsDuplicateAndIncompleteInputWithoutWriting(t *testing.T) {
+	tests := []struct {
+		name  string
+		input ProjectInput
+		want  string
+	}{
+		{
+			name: "duplicate alias",
+			input: ProjectInput{
+				Alias:        "alpha",
+				BWSProjectID: "11111111-1111-1111-1111-111111111111",
+				TokenEntry:   "alpha-new",
+				WorkingDir:   "/srv/alpha",
+			},
+			want: "already exists",
+		},
+		{
+			name: "missing alias",
+			input: ProjectInput{
+				BWSProjectID: "11111111-1111-1111-1111-111111111111",
+				TokenEntry:   "beta",
+				WorkingDir:   "/srv/beta",
+			},
+			want: "alias is required",
+		},
+		{
+			name: "missing BWS project ID",
+			input: ProjectInput{
+				Alias:      "beta",
+				TokenEntry: "beta",
+				WorkingDir: "/srv/beta",
+			},
+			want: "bws project ID is required",
+		},
+		{
+			name: "missing token entry",
+			input: ProjectInput{
+				Alias:        "beta",
+				BWSProjectID: "11111111-1111-1111-1111-111111111111",
+				WorkingDir:   "/srv/beta",
+			},
+			want: "token entry is required",
+		},
+		{
+			name: "missing working directory",
+			input: ProjectInput{
+				Alias:        "beta",
+				BWSProjectID: "11111111-1111-1111-1111-111111111111",
+				TokenEntry:   "beta",
+			},
+			want: "working directory is required",
+		},
+		{
+			name: "relative working directory",
+			input: ProjectInput{
+				Alias:        "beta",
+				BWSProjectID: "11111111-1111-1111-1111-111111111111",
+				TokenEntry:   "beta",
+				WorkingDir:   "srv/beta",
+			},
+			want: "working directory must be an absolute path",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contents := policyWithProjects(projectBlock("alpha", `approval = "never"`))
+			path := writePolicy(t, contents)
+			if _, err := NewEditor(path, uint32(os.Geteuid())).CreateProject(tt.input); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("CreateProject error = %v, want containing %q", err, tt.want)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("reading policy: %v", err)
+			}
+			if string(data) != contents {
+				t.Fatal("rejected project creation changed the policy")
+			}
+		})
+	}
+}
+
+func TestCreateProjectRejectsPolicyLargerThanReadLimitWithoutWriting(t *testing.T) {
+	contents := policyWithProjects(projectBlock("alpha", `approval = "never"`))
+	path := writePolicy(t, contents)
+	input := ProjectInput{
+		Alias:        strings.Repeat("a", maxPolicyBytes),
+		BWSProjectID: "11111111-1111-1111-1111-111111111111",
+		TokenEntry:   "beta",
+		WorkingDir:   "/srv/beta",
+	}
+
+	if _, err := NewEditor(path, uint32(os.Geteuid())).CreateProject(input); err == nil || !strings.Contains(err.Error(), "exceeds maximum size") {
+		t.Fatalf("CreateProject error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading policy: %v", err)
+	}
+	if string(data) != contents {
+		t.Fatal("oversized project creation changed the policy")
+	}
+}
+
 func TestSetApprovalChangesOnlySelectedValueAndPreservesMetadata(t *testing.T) {
 	contents := policyWithProjects(
 		projectBlock("alpha", `approval = "allowlisted-prompt"`),
