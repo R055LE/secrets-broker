@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 	"syscall"
 
 	"github.com/R055LE/secrets-broker/internal/config"
@@ -35,6 +36,13 @@ type ProjectSummary struct {
 	Alias    string
 	Mode     string
 	Behavior string
+}
+
+type ProjectInput struct {
+	Alias        string
+	BWSProjectID string
+	TokenEntry   string
+	WorkingDir   string
 }
 
 type Editor struct {
@@ -71,6 +79,49 @@ func (e *Editor) ListAllowlist(alias string) ([][]string, error) {
 		return nil, err
 	}
 	return cloneArgv(cfg.Projects[projectIndex].Allow), nil
+}
+
+func (e *Editor) CreateProject(input ProjectInput) (bool, error) {
+	if err := validateProjectInput(input); err != nil {
+		return false, err
+	}
+
+	data, cfg, metadata, err := e.readPolicy()
+	if err != nil {
+		return false, err
+	}
+	for _, project := range cfg.Projects {
+		if project.Alias == input.Alias {
+			return false, fmt.Errorf("project %q already exists", input.Alias)
+		}
+	}
+
+	project := config.Project{
+		Alias:        input.Alias,
+		BWSProjectID: input.BWSProjectID,
+		TokenEntry:   input.TokenEntry,
+		WorkingDir:   input.WorkingDir,
+		Approval:     config.ApprovalAllowlistedPrompt,
+	}
+	updated := appendProject(data, project)
+	updatedConfig, err := config.Parse(updated)
+	if err != nil {
+		return false, fmt.Errorf("validating updated policy: %w", err)
+	}
+	if err := updatedConfig.ValidateWorker(); err != nil {
+		return false, fmt.Errorf("validating updated worker policy: %w", err)
+	}
+
+	expected := *cfg
+	expected.Projects = append(append([]config.Project(nil), cfg.Projects...), project)
+	if !reflect.DeepEqual(&expected, updatedConfig) {
+		return false, errors.New("updated policy changed fields outside the new project")
+	}
+
+	if err := e.writeAtomic(updated, metadata); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (e *Editor) SetApproval(alias, mode string) (bool, error) {
@@ -198,6 +249,57 @@ func (e *Editor) RemoveAllowlist(alias string, argv []string) (bool, error) {
 	return true, nil
 }
 
+func validateProjectInput(input ProjectInput) error {
+	if input.Alias == "" {
+		return errors.New("project alias is required")
+	}
+	if input.BWSProjectID == "" {
+		return errors.New("bws project ID is required")
+	}
+	if input.TokenEntry == "" {
+		return errors.New("token entry is required")
+	}
+	if input.WorkingDir == "" {
+		return errors.New("working directory is required")
+	}
+	if !filepath.IsAbs(input.WorkingDir) {
+		return errors.New("working directory must be an absolute path")
+	}
+	return nil
+}
+
+func appendProject(data []byte, project config.Project) []byte {
+	values := make([]string, 4)
+	for i, value := range []string{project.Alias, project.BWSProjectID, project.TokenEntry, project.WorkingDir} {
+		encoded, _ := json.Marshal(value)
+		values[i] = string(encoded)
+	}
+
+	newline := []byte("\n")
+	if bytes.Contains(data, []byte("\r\n")) {
+		newline = []byte("\r\n")
+	}
+	updated := append([]byte(nil), data...)
+	if len(updated) > 0 && !bytes.HasSuffix(updated, newline) {
+		updated = append(updated, newline...)
+	}
+	doubleNewline := append(append([]byte(nil), newline...), newline...)
+	if len(updated) > 0 && !bytes.HasSuffix(updated, doubleNewline) {
+		updated = append(updated, newline...)
+	}
+	lines := []string{
+		"[[projects]]",
+		"alias = " + values[0],
+		"bws_project_id = " + values[1],
+		"token_entry = " + values[2],
+		"working_dir = " + values[3],
+		`approval = "` + config.ApprovalAllowlistedPrompt + `"`,
+	}
+	updated = append(updated, []byte(strings.Join(lines, string(newline)))...)
+	updated = append(updated, newline...)
+	return updated
+}
+
 type fileMetadata struct {
 	mode     os.FileMode
 	uid      uint32
@@ -270,6 +372,9 @@ func (e *Editor) metadata() (fileMetadata, error) {
 }
 
 func (e *Editor) writeAtomic(data []byte, original fileMetadata) error {
+	if len(data) > maxPolicyBytes {
+		return fmt.Errorf("updated policy exceeds maximum size of %d bytes", maxPolicyBytes)
+	}
 	current, err := e.metadata()
 	if err != nil {
 		return err

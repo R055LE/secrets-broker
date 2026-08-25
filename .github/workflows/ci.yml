@@ -143,12 +143,35 @@ jobs:
 
           sudo /usr/local/sbin/secrets-broker-admin projects list | grep -Fq agent-project
           sudo test ! -e /var/log/secrets-broker-admin/audit.jsonl
+          sudo /usr/local/sbin/secrets-broker-admin projects create ci-created \
+            --bws-project-id 11111111-1111-1111-1111-111111111111 \
+            --token-entry ci-created-token \
+            --working-dir /home/runner \
+            | grep -Fq 'created in confirm mode with an empty allowlist'
+          sudo /usr/local/sbin/secrets-broker-admin projects list \
+            | grep -Eq '^ci-created[[:space:]]+confirm[[:space:]]'
+          test "$(sudo /usr/local/sbin/secrets-broker-admin projects allowlist list ci-created | wc -l)" = 1
+          test "$(sudo grep -Fc 'approval = "allowlisted-prompt"' /etc/secrets-broker/policy.toml)" = 2
+          test "$(sudo stat -c '%U:%G:%a' /etc/secrets-broker/policy.toml)" = "root:secrets-broker:640"
+          if sudo /usr/local/sbin/secrets-broker-admin projects create ci-created \
+            --bws-project-id 11111111-1111-1111-1111-111111111111 \
+            --token-entry ci-created-token \
+            --working-dir /home/runner; then
+            echo 'duplicate project creation unexpectedly succeeded' >&2
+            exit 1
+          fi
+          test "$(sudo grep -Fc '"operation":"create_project"' /var/log/secrets-broker-admin/audit.jsonl)" = 2
+          sudo grep -Fq '"outcome":"failed"' /var/log/secrets-broker-admin/audit.jsonl
           sudo /usr/local/sbin/secrets-broker-admin projects set-approval agent-project automatic
           sudo grep -Fq 'approval = "never"' /etc/secrets-broker/policy.toml
           test "$(sudo stat -c '%U:%G:%a' /var/log/secrets-broker-admin/audit.jsonl)" = "root:root:600"
           sudo grep -Fq '"operation":"set_approval"' /var/log/secrets-broker-admin/audit.jsonl
           sudo grep -Fq '"outcome":"changed"' /var/log/secrets-broker-admin/audit.jsonl
-          ! sudo grep -Eq 'token|bws_project_id|secret' /var/log/secrets-broker-admin/audit.jsonl
+          if sudo grep -Eq '11111111-1111-1111-1111-111111111111|token|bws_project_id|working_dir|secret' \
+            /var/log/secrets-broker-admin/audit.jsonl; then
+            echo 'administrator audit contains a forbidden field or value' >&2
+            exit 1
+          fi
           test "$(sudo stat -c '%U:%G:%a' /etc/secrets-broker/policy.toml)" = "root:secrets-broker:640"
           sudo /usr/local/sbin/secrets-broker-admin projects set-approval agent-project confirm
           sudo grep -Fq 'approval = "allowlisted-prompt"' /etc/secrets-broker/policy.toml

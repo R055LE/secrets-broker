@@ -18,8 +18,8 @@ a second runner UID. Read `decisions/`, especially ADR-0010, before changing a s
 - `cmd/secrets-broker/`: untrusted, agent-facing CLI. It has no adapter or path override flags.
 - `cmd/secrets-broker-worker/`: fixed client protocol plus a reserved admin check, run as
   `secrets-broker`.
-- `cmd/secrets-broker-admin/`: root-only project listing, approval-mode changes, and exact argv
-  allowlist changes against the fixed worker policy path.
+- `cmd/secrets-broker-admin/`: root-only safe project creation, project listing, approval-mode
+  changes, and exact argv allowlist changes against the fixed worker policy path.
 - `cmd/secrets-broker-relay/`: two-port approval relay for a separate Tailscale device.
 - `internal/worker/`: bounded JSON protocol, fixed client invocation, and worker composition.
 - `internal/broker/`: deny-by-default policy, approval, token, audit, and execution flow. It depends
