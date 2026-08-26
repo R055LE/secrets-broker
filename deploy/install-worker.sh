@@ -22,6 +22,8 @@ readonly AUDIT_DIR=/var/log/secrets-broker
 readonly AUDIT_FILE=/var/log/secrets-broker/audit.jsonl
 readonly ADMIN_AUDIT_DIR=/var/log/secrets-broker-admin
 readonly ADMIN_AUDIT_FILE=/var/log/secrets-broker-admin/audit.jsonl
+readonly ADMIN_STATE_DIR=/var/lib/secrets-broker-admin
+readonly RECOVERY_DIR=/var/lib/secrets-broker-admin/recovery
 readonly TOKEN_FILE=/var/lib/secrets-broker/bws-access-token
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -239,6 +241,11 @@ install_worker() {
     [[ -f "$LOGROTATE_TARGET" && ! -L "$LOGROTATE_TARGET" ]] ||
       fail "refusing unsafe existing logrotate policy: $LOGROTATE_TARGET"
   fi
+  for state_dir in "$ADMIN_STATE_DIR" "$RECOVERY_DIR"; do
+    if [[ -e "$state_dir" || -L "$state_dir" ]]; then
+      [[ -d "$state_dir" && ! -L "$state_dir" ]] || fail "refusing unsafe administrator state directory: $state_dir"
+    fi
+  done
   if [[ -n "$bws_source" ]]; then
     require_executable_source "$bws_source" "bws source"
   elif [[ ! -f "$BWS_TARGET" || -L "$BWS_TARGET" || ! -x "$BWS_TARGET" ]]; then
@@ -270,6 +277,8 @@ install_worker() {
   install -d -o root -g root -m 0755 /etc/secrets-broker
   install -d -o "$WORKER_USER" -g "$WORKER_USER" -m 0700 "$AUDIT_DIR"
   install -d -o root -g root -m 0700 "$ADMIN_AUDIT_DIR"
+  install -d -o root -g root -m 0700 "$ADMIN_STATE_DIR"
+  install -d -o root -g root -m 0700 "$RECOVERY_DIR"
 
   install -D -o root -g root -m 0755 "$cli_source" "$CLI_TARGET"
   install -D -o root -g root -m 0755 "$admin_source" "$ADMIN_TARGET"
@@ -340,6 +349,8 @@ check_worker() {
   check_directory /etc/secrets-broker root root 755
   check_directory "$AUDIT_DIR" "$WORKER_USER" "$WORKER_USER" 700
   check_directory "$ADMIN_AUDIT_DIR" root root 700
+  check_directory "$ADMIN_STATE_DIR" root root 700
+  check_directory "$RECOVERY_DIR" root root 700
   check_regular_file "$CLI_TARGET" root root 755
   check_regular_file "$ADMIN_TARGET" root root 755
   check_regular_file "$WORKER_TARGET" root root 755
@@ -375,6 +386,7 @@ check_worker() {
   worker_check="$(runuser -u "$WORKER_USER" -- "$WORKER_TARGET" check 2>&1)" ||
     fail "worker semantic check failed: $worker_check"
   "$ADMIN_TARGET" projects list >/dev/null || fail "administrator CLI policy check failed"
+  "$ADMIN_TARGET" projects recovery list >/dev/null || fail "administrator recovery check failed"
   cli_version="$(runuser -u "$client_user" -- "$CLI_TARGET" version 2>&1)" || fail "CLI version check failed"
   bws_version="$(runuser -u "$RUNNER_USER" -- "$BWS_TARGET" --version 2>&1)" || fail "bws version check failed"
   sudo_version="$(sudo --version 2>&1 | sed -n '1p')"

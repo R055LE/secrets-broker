@@ -162,12 +162,72 @@ jobs:
           fi
           test "$(sudo grep -Fc '"operation":"create_project"' /var/log/secrets-broker-admin/audit.jsonl)" = 2
           sudo grep -Fq '"outcome":"failed"' /var/log/secrets-broker-admin/audit.jsonl
+
+          policy_before_removal="$(sudo sha256sum /etc/secrets-broker/policy.toml)"
+          remove_output="$(
+            sudo /usr/local/sbin/secrets-broker-admin projects remove ci-created \
+              --confirm ci-created
+          )"
+          printf '%s\n' "$remove_output"
+          recovery_id="${remove_output##*Recovery ID: }"
+          recovery_id="${recovery_id%.}"
+          [[ "$recovery_id" =~ ^[0-9a-f]{32}$ ]]
+          recovery_artifact="/var/lib/secrets-broker-admin/recovery/$recovery_id"
+          test "$(sudo stat -c '%U:%G:%a' /var/lib/secrets-broker-admin)" = "root:root:700"
+          test "$(sudo stat -c '%U:%G:%a' /var/lib/secrets-broker-admin/recovery)" = "root:root:700"
+          test "$(sudo stat -c '%U:%G:%a' "$recovery_artifact")" = "root:root:600"
+          if sudo grep -Fq 'alias = "ci-created"' /etc/secrets-broker/policy.toml; then
+            echo 'removed project remains in policy' >&2
+            exit 1
+          fi
+          sudo /usr/local/sbin/secrets-broker-admin projects recovery list \
+            | awk -v id="$recovery_id" '$1 == id && $2 == "ci-created" && NF == 3 { found = 1 } END { exit !found }'
+          if sudo /usr/local/sbin/secrets-broker-admin projects recovery list \
+            | grep -Eq '11111111-1111-1111-1111-111111111111|ci-created-token|working_dir|argv|sha256'; then
+            echo 'recovery listing exposed protected artifact fields' >&2
+            exit 1
+          fi
+          sudo -u runner test ! -r "$recovery_artifact"
+          sudo -u secrets-broker test ! -r "$recovery_artifact"
+          sudo -u secrets-broker-runner test ! -r "$recovery_artifact"
+          policy_after_removal="$(sudo sha256sum /etc/secrets-broker/policy.toml)"
+          if sudo /usr/local/sbin/secrets-broker-admin projects recovery restore "$recovery_id" \
+            --confirm agent-project; then
+            echo 'recovery restore accepted the wrong alias confirmation' >&2
+            exit 1
+          fi
+          test "$policy_after_removal" = "$(sudo sha256sum /etc/secrets-broker/policy.toml)"
+          sudo /usr/local/sbin/secrets-broker-admin projects recovery restore "$recovery_id" \
+            --confirm ci-created \
+            | grep -Fq 'Project "ci-created" restored'
+          test "$policy_before_removal" = "$(sudo sha256sum /etc/secrets-broker/policy.toml)"
+          sudo test -f "$recovery_artifact"
+
+          second_remove_output="$(
+            sudo /usr/local/sbin/secrets-broker-admin projects remove ci-created \
+              --confirm ci-created
+          )"
+          second_recovery_id="${second_remove_output##*Recovery ID: }"
+          second_recovery_id="${second_recovery_id%.}"
+          [[ "$second_recovery_id" =~ ^[0-9a-f]{32}$ ]]
+          [[ "$second_recovery_id" != "$recovery_id" ]]
+          artifact_count="$(sudo find /var/lib/secrets-broker-admin/recovery -mindepth 1 -maxdepth 1 -type f | wc -l)"
+          if sudo /usr/local/sbin/secrets-broker-admin projects remove agent-project \
+            --confirm agent-project; then
+            echo 'removal of the final project unexpectedly succeeded' >&2
+            exit 1
+          fi
+          test "$artifact_count" = \
+            "$(sudo find /var/lib/secrets-broker-admin/recovery -mindepth 1 -maxdepth 1 -type f | wc -l)"
+          sudo grep -Fq 'alias = "agent-project"' /etc/secrets-broker/policy.toml
+          sudo grep -Fq '"operation":"remove_project"' /var/log/secrets-broker-admin/audit.jsonl
+          sudo grep -Fq '"operation":"restore_project"' /var/log/secrets-broker-admin/audit.jsonl
           sudo /usr/local/sbin/secrets-broker-admin projects set-approval agent-project automatic
           sudo grep -Fq 'approval = "never"' /etc/secrets-broker/policy.toml
           test "$(sudo stat -c '%U:%G:%a' /var/log/secrets-broker-admin/audit.jsonl)" = "root:root:600"
           sudo grep -Fq '"operation":"set_approval"' /var/log/secrets-broker-admin/audit.jsonl
           sudo grep -Fq '"outcome":"changed"' /var/log/secrets-broker-admin/audit.jsonl
-          if sudo grep -Eq '11111111-1111-1111-1111-111111111111|token|bws_project_id|working_dir|secret' \
+          if sudo grep -Eq '11111111-1111-1111-1111-111111111111|token|bws_project_id|working_dir|secret|before_sha256|after_sha256|/var/lib/secrets-broker-admin' \
             /var/log/secrets-broker-admin/audit.jsonl; then
             echo 'administrator audit contains a forbidden field or value' >&2
             exit 1
@@ -226,6 +286,9 @@ jobs:
           sudo -u runner test ! -r /var/log/secrets-broker-admin/audit.jsonl.1
           sudo -u secrets-broker test ! -r /var/log/secrets-broker-admin/audit.jsonl.1
           sudo -u secrets-broker-runner test ! -r /var/log/secrets-broker-admin/audit.jsonl.1
+          sudo -u runner test ! -r "$recovery_artifact"
+          sudo -u secrets-broker test ! -r "$recovery_artifact"
+          sudo -u secrets-broker-runner test ! -r "$recovery_artifact"
 
       - name: Install and check relay service
         run: |

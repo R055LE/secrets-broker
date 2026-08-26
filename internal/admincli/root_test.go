@@ -6,20 +6,25 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/R055LE/secrets-broker/internal/admin"
 )
 
 type fakeProjectEditor struct {
-	projects []admin.ProjectSummary
-	changed  bool
-	err      error
-	alias    string
-	mode     string
-	allow    [][]string
-	argv     []string
-	input    admin.ProjectInput
-	calls    int
+	projects       []admin.ProjectSummary
+	changed        bool
+	err            error
+	alias          string
+	mode           string
+	allow          [][]string
+	argv           []string
+	input          admin.ProjectInput
+	recoveryResult admin.RecoveryResult
+	recoveries     []admin.RecoverySummary
+	recoveryID     string
+	confirmation   string
+	calls          int
 }
 
 func (f *fakeProjectEditor) ListProjects() ([]admin.ProjectSummary, error) {
@@ -58,6 +63,25 @@ func (f *fakeProjectEditor) RemoveAllowlist(alias string, argv []string) (bool, 
 	f.alias = alias
 	f.argv = argv
 	return f.changed, f.err
+}
+
+func (f *fakeProjectEditor) RemoveProject(alias, confirmation string) (admin.RecoveryResult, error) {
+	f.calls++
+	f.alias = alias
+	f.confirmation = confirmation
+	return f.recoveryResult, f.err
+}
+
+func (f *fakeProjectEditor) ListRecoveries() ([]admin.RecoverySummary, error) {
+	f.calls++
+	return f.recoveries, f.err
+}
+
+func (f *fakeProjectEditor) RestoreProject(recoveryID, confirmation string) (admin.RecoveryResult, error) {
+	f.calls++
+	f.recoveryID = recoveryID
+	f.confirmation = confirmation
+	return f.recoveryResult, f.err
 }
 
 func TestProjectsList(t *testing.T) {
@@ -171,6 +195,119 @@ func TestProjectsSetApprovalReportsNoOp(t *testing.T) {
 	}
 }
 
+func TestProjectsRemoveRequiresExactConfirmationAndReportsRecoveryID(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	editor := &fakeProjectEditor{recoveryResult: admin.RecoveryResult{Changed: true, RecoveryID: id}}
+	var stdout, stderr bytes.Buffer
+
+	args := []string{"projects", "remove", "github-ops", "--confirm", "github-ops"}
+	if code := execute(func() int { return 0 }, editor, args, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if editor.alias != "github-ops" || editor.confirmation != "github-ops" {
+		t.Fatalf("RemoveProject called with %q %q", editor.alias, editor.confirmation)
+	}
+	if !strings.Contains(stdout.String(), id) {
+		t.Fatalf("output missing recovery ID: %q", stdout.String())
+	}
+}
+
+func TestProjectsRemovePassesMissingConfirmationToAuditedEditor(t *testing.T) {
+	editor := &fakeProjectEditor{err: errors.New("project confirmation is required")}
+	var stdout, stderr bytes.Buffer
+
+	if code := execute(func() int { return 0 }, editor, []string{"projects", "remove", "github-ops"}, &stdout, &stderr); code == 0 {
+		t.Fatal("expected missing confirmation to fail")
+	}
+	if editor.calls != 1 || editor.confirmation != "" {
+		t.Fatalf("editor called %d times", editor.calls)
+	}
+	if !strings.Contains(stderr.String(), "project confirmation is required") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestProjectsRemoveReportsRecoveryIDAfterArtifactPublicationError(t *testing.T) {
+	id := strings.Repeat("b", 32)
+	editor := &fakeProjectEditor{
+		err:            errors.New("policy changed before atomic replacement"),
+		recoveryResult: admin.RecoveryResult{RecoveryID: id},
+	}
+	var stdout, stderr bytes.Buffer
+
+	args := []string{"projects", "remove", "github-ops", "--confirm", "github-ops"}
+	if code := execute(func() int { return 0 }, editor, args, &stdout, &stderr); code == 0 {
+		t.Fatal("expected removal to fail")
+	}
+	if !strings.Contains(stderr.String(), id) {
+		t.Fatalf("stderr missing recovery ID: %q", stderr.String())
+	}
+}
+
+func TestProjectsRecoveryListPrintsOnlyApprovedMetadata(t *testing.T) {
+	id := strings.Repeat("c", 32)
+	created := time.Date(2026, time.August, 25, 12, 30, 0, 0, time.UTC)
+	editor := &fakeProjectEditor{recoveries: []admin.RecoverySummary{{
+		RecoveryID: id,
+		Project:    "github-ops",
+		CreatedAt:  created,
+	}}}
+	var stdout, stderr bytes.Buffer
+
+	if code := execute(func() int { return 0 }, editor, []string{"projects", "recovery", "list"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	for _, want := range []string{"RECOVERY_ID", "ALIAS", "CREATED_AT", id, "github-ops", created.Format(time.RFC3339Nano)} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("output missing %q: %s", want, stdout.String())
+		}
+	}
+	for _, forbidden := range []string{"sha256", "policy", "working_dir", "token_entry", "argv"} {
+		if strings.Contains(stdout.String(), forbidden) {
+			t.Fatalf("output contains forbidden field %q: %s", forbidden, stdout.String())
+		}
+	}
+}
+
+func TestProjectsRecoveryRestorePassesIDAndConfirmation(t *testing.T) {
+	id := strings.Repeat("d", 32)
+	editor := &fakeProjectEditor{recoveryResult: admin.RecoveryResult{Changed: true, RecoveryID: id}}
+	var stdout, stderr bytes.Buffer
+
+	args := []string{"projects", "recovery", "restore", id, "--confirm", "github-ops"}
+	if code := execute(func() int { return 0 }, editor, args, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if editor.recoveryID != id || editor.confirmation != "github-ops" {
+		t.Fatalf("RestoreProject called with %q %q", editor.recoveryID, editor.confirmation)
+	}
+	if !strings.Contains(stdout.String(), `Project "github-ops" restored`) {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestProjectsRecoveryRestorePassesMissingConfirmationToAuditedEditor(t *testing.T) {
+	id := strings.Repeat("e", 32)
+	editor := &fakeProjectEditor{err: errors.New("project confirmation is required")}
+	var stdout, stderr bytes.Buffer
+
+	args := []string{"projects", "recovery", "restore", id}
+	if code := execute(func() int { return 0 }, editor, args, &stdout, &stderr); code == 0 {
+		t.Fatal("expected missing confirmation to fail")
+	}
+	if editor.calls != 1 || editor.recoveryID != id || editor.confirmation != "" {
+		t.Fatalf(
+			"RestoreProject called %d times with %q %q",
+			editor.calls,
+			editor.recoveryID,
+			editor.confirmation,
+		)
+	}
+	if !strings.Contains(stderr.String(), "project confirmation is required") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
 func TestProjectsAllowlistList(t *testing.T) {
 	editor := &fakeProjectEditor{allow: [][]string{
 		{"/usr/bin/true"},
@@ -269,6 +406,21 @@ func TestProjectsCreateDoesNotExposeUnsafeDefaults(t *testing.T) {
 	for _, name := range []string{"approval", "allow", "allowlist", "secret", "policy", "config"} {
 		if create.Flags().Lookup(name) != nil || create.PersistentFlags().Lookup(name) != nil {
 			t.Fatalf("project creation must not expose --%s", name)
+		}
+	}
+}
+
+func TestProjectRecoveryDoesNotExposeUnsafeOverrides(t *testing.T) {
+	root := newRootCommand(func() int { return 0 }, &fakeProjectEditor{}, &bytes.Buffer{})
+	for _, path := range [][]string{{"projects", "remove"}, {"projects", "recovery", "restore"}} {
+		command, _, err := root.Find(path)
+		if err != nil {
+			t.Fatalf("finding %v: %v", path, err)
+		}
+		for _, name := range []string{"yes", "force", "policy", "config", "recovery-dir", "path"} {
+			if command.Flags().Lookup(name) != nil || command.PersistentFlags().Lookup(name) != nil {
+				t.Fatalf("%v must not expose --%s", path, name)
+			}
 		}
 	}
 }

@@ -21,6 +21,8 @@ const (
 	MutationSetApproval     = "set_approval"
 	MutationAddAllowlist    = "add_allowlist"
 	MutationRemoveAllowlist = "remove_allowlist"
+	MutationRemoveProject   = "remove_project"
+	MutationRestoreProject  = "restore_project"
 
 	MutationChanged  = "changed"
 	MutationNoChange = "no_change"
@@ -34,6 +36,9 @@ type ProjectEditor interface {
 	SetApproval(alias, mode string) (bool, error)
 	AddAllowlist(alias string, argv []string) (bool, error)
 	RemoveAllowlist(alias string, argv []string) (bool, error)
+	RemoveProject(alias, confirmation, recoveryID string) (RecoveryResult, error)
+	ListRecoveries() ([]RecoverySummary, error)
+	RestoreProject(recoveryID, confirmation string) (RecoveryResult, error)
 }
 
 type MutationStart struct {
@@ -42,6 +47,7 @@ type MutationStart struct {
 	Operation    string
 	ApprovalMode string
 	Argv         []string
+	RecoveryID   string
 }
 
 type MutationFinish struct {
@@ -54,13 +60,28 @@ type MutationLogger interface {
 }
 
 type AuditedEditor struct {
-	editor   ProjectEditor
-	logger   MutationLogger
-	actorUID int
+	editor        ProjectEditor
+	logger        MutationLogger
+	actorUID      int
+	newRecoveryID func() (string, error)
 }
 
 func NewAuditedEditor(editor ProjectEditor, logger MutationLogger, actorUID int) *AuditedEditor {
-	return &AuditedEditor{editor: editor, logger: logger, actorUID: actorUID}
+	return newAuditedEditor(editor, logger, actorUID, newRecoveryID)
+}
+
+func newAuditedEditor(
+	editor ProjectEditor,
+	logger MutationLogger,
+	actorUID int,
+	recoveryIDGenerator func() (string, error),
+) *AuditedEditor {
+	return &AuditedEditor{
+		editor:        editor,
+		logger:        logger,
+		actorUID:      actorUID,
+		newRecoveryID: recoveryIDGenerator,
+	}
 }
 
 func (e *AuditedEditor) ListProjects() ([]ProjectSummary, error) {
@@ -69,6 +90,10 @@ func (e *AuditedEditor) ListProjects() ([]ProjectSummary, error) {
 
 func (e *AuditedEditor) ListAllowlist(alias string) ([][]string, error) {
 	return e.editor.ListAllowlist(alias)
+}
+
+func (e *AuditedEditor) ListRecoveries() ([]RecoverySummary, error) {
+	return e.editor.ListRecoveries()
 }
 
 func (e *AuditedEditor) CreateProject(input ProjectInput) (bool, error) {
@@ -115,6 +140,32 @@ func (e *AuditedEditor) RemoveAllowlist(alias string, argv []string) (bool, erro
 	})
 }
 
+func (e *AuditedEditor) RemoveProject(alias, confirmation string) (RecoveryResult, error) {
+	recoveryID, err := e.newRecoveryID()
+	if err != nil {
+		return RecoveryResult{}, fmt.Errorf("generating recovery ID: %w", err)
+	}
+	return e.mutateRecovery(MutationStart{
+		ActorUID:   e.actorUID,
+		Project:    alias,
+		Operation:  MutationRemoveProject,
+		RecoveryID: recoveryID,
+	}, func() (RecoveryResult, error) {
+		return e.editor.RemoveProject(alias, confirmation, recoveryID)
+	})
+}
+
+func (e *AuditedEditor) RestoreProject(recoveryID, confirmation string) (RecoveryResult, error) {
+	return e.mutateRecovery(MutationStart{
+		ActorUID:   e.actorUID,
+		Project:    confirmation,
+		Operation:  MutationRestoreProject,
+		RecoveryID: recoveryID,
+	}, func() (RecoveryResult, error) {
+		return e.editor.RestoreProject(recoveryID, confirmation)
+	})
+}
+
 func (e *AuditedEditor) mutate(start MutationStart, update func() (bool, error)) (bool, error) {
 	ctx := context.Background()
 	mutationID, err := e.logger.Start(ctx, start)
@@ -142,6 +193,36 @@ func (e *AuditedEditor) mutate(start MutationStart, update func() (bool, error))
 	return changed, updateErr
 }
 
+func (e *AuditedEditor) mutateRecovery(
+	start MutationStart,
+	update func() (RecoveryResult, error),
+) (RecoveryResult, error) {
+	ctx := context.Background()
+	mutationID, err := e.logger.Start(ctx, start)
+	if err != nil {
+		return RecoveryResult{}, fmt.Errorf("starting administrator audit: %w", err)
+	}
+
+	result, updateErr := update()
+	outcome := MutationNoChange
+	if updateErr != nil {
+		outcome = MutationFailed
+	} else if result.Changed {
+		outcome = MutationChanged
+	}
+
+	finishErr := e.logger.Finish(ctx, mutationID, MutationFinish{Outcome: outcome})
+	if finishErr != nil {
+		if result.Changed {
+			finishErr = fmt.Errorf("policy changed but administrator audit completion failed: %w", finishErr)
+		} else {
+			finishErr = fmt.Errorf("finishing administrator audit: %w", finishErr)
+		}
+		return result, errors.Join(updateErr, finishErr)
+	}
+	return result, updateErr
+}
+
 type MutationJSONLLogger struct {
 	mu   sync.Mutex
 	path string
@@ -161,6 +242,7 @@ type mutationRecord struct {
 	ApprovalMode string    `json:"approval_mode,omitempty"`
 	ArgvSHA256   string    `json:"argv_sha256,omitempty"`
 	ArgvCount    int       `json:"argv_count,omitempty"`
+	RecoveryID   string    `json:"recovery_id,omitempty"`
 	Outcome      string    `json:"outcome,omitempty"`
 }
 
@@ -184,6 +266,7 @@ func (l *MutationJSONLLogger) Start(_ context.Context, rec MutationStart) (strin
 		ApprovalMode: rec.ApprovalMode,
 		ArgvSHA256:   argvSHA256,
 		ArgvCount:    len(rec.Argv),
+		RecoveryID:   rec.RecoveryID,
 	})
 	if err != nil {
 		return "", err
@@ -239,7 +322,15 @@ func (l *MutationJSONLLogger) append(rec mutationRecord) error {
 }
 
 func newMutationID() (string, error) {
-	b := make([]byte, 8)
+	return newRandomHexID(8)
+}
+
+func newRecoveryID() (string, error) {
+	return newRandomHexID(16)
+}
+
+func newRandomHexID(size int) (string, error) {
+	b := make([]byte, size)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
