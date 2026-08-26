@@ -20,9 +20,12 @@ var (
 )
 
 type fakeMutationEditor struct {
-	changed bool
-	err     error
-	calls   int
+	changed        bool
+	err            error
+	calls          int
+	recoveryID     string
+	confirmation   string
+	recoveryResult RecoveryResult
 }
 
 func (f *fakeMutationEditor) ListProjects() ([]ProjectSummary, error) {
@@ -51,6 +54,30 @@ func (f *fakeMutationEditor) AddAllowlist(string, []string) (bool, error) {
 func (f *fakeMutationEditor) RemoveAllowlist(string, []string) (bool, error) {
 	f.calls++
 	return f.changed, f.err
+}
+
+func (f *fakeMutationEditor) RemoveProject(_ string, confirmation, recoveryID string) (RecoveryResult, error) {
+	f.calls++
+	f.confirmation = confirmation
+	f.recoveryID = recoveryID
+	if f.recoveryResult == (RecoveryResult{}) {
+		f.recoveryResult.Changed = f.changed
+	}
+	return f.recoveryResult, f.err
+}
+
+func (f *fakeMutationEditor) ListRecoveries() ([]RecoverySummary, error) {
+	return nil, f.err
+}
+
+func (f *fakeMutationEditor) RestoreProject(recoveryID, confirmation string) (RecoveryResult, error) {
+	f.calls++
+	f.recoveryID = recoveryID
+	f.confirmation = confirmation
+	if f.recoveryResult == (RecoveryResult{}) {
+		f.recoveryResult.Changed = f.changed
+	}
+	return f.recoveryResult, f.err
 }
 
 type fakeMutationLogger struct {
@@ -175,6 +202,108 @@ func TestAuditedEditorBlocksMutationWhenStartAuditFails(t *testing.T) {
 	}
 }
 
+func TestAuditedEditorRecordsRemovalWithRecoveryID(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	editor := &fakeMutationEditor{recoveryResult: RecoveryResult{Changed: true, RecoveryID: id}}
+	logger := &fakeMutationLogger{}
+	audited := newAuditedEditor(editor, logger, 0, func() (string, error) { return id, nil })
+
+	result, err := audited.RemoveProject("project", "project")
+	if err != nil {
+		t.Fatalf("RemoveProject: %v", err)
+	}
+	if !result.Changed || result.RecoveryID != id {
+		t.Fatalf("result = %#v", result)
+	}
+	if editor.recoveryID != id || editor.confirmation != "project" {
+		t.Fatalf("editor received recovery ID %q and confirmation %q", editor.recoveryID, editor.confirmation)
+	}
+	wantStart := MutationStart{
+		ActorUID:   0,
+		Project:    "project",
+		Operation:  MutationRemoveProject,
+		RecoveryID: id,
+	}
+	if !reflect.DeepEqual(logger.starts, []MutationStart{wantStart}) {
+		t.Fatalf("starts = %#v, want %#v", logger.starts, []MutationStart{wantStart})
+	}
+	if !reflect.DeepEqual(logger.finishes, []MutationFinish{{Outcome: MutationChanged}}) {
+		t.Fatalf("finishes = %#v", logger.finishes)
+	}
+}
+
+func TestAuditedEditorBlocksRecoveryBeforeEditorWhenStartAuditFails(t *testing.T) {
+	id := strings.Repeat("b", 32)
+	editor := &fakeMutationEditor{}
+	logger := &fakeMutationLogger{startErr: errAuditUnavailable}
+	audited := newAuditedEditor(editor, logger, 0, func() (string, error) { return id, nil })
+
+	result, err := audited.RemoveProject("project", "project")
+	if result != (RecoveryResult{}) || !errors.Is(err, errAuditUnavailable) {
+		t.Fatalf("result = %#v, err = %v", result, err)
+	}
+	if editor.calls != 0 {
+		t.Fatalf("editor called %d times after audit failure", editor.calls)
+	}
+}
+
+func TestAuditedEditorReturnsRecoveryIDWhenFinishFailsAfterRemoval(t *testing.T) {
+	id := strings.Repeat("c", 32)
+	editor := &fakeMutationEditor{recoveryResult: RecoveryResult{Changed: true, RecoveryID: id}}
+	logger := &fakeMutationLogger{finishErr: errAuditUnavailable}
+	audited := newAuditedEditor(editor, logger, 0, func() (string, error) { return id, nil })
+
+	result, err := audited.RemoveProject("project", "project")
+	if !result.Changed || result.RecoveryID != id || !errors.Is(err, errAuditUnavailable) {
+		t.Fatalf("result = %#v, err = %v", result, err)
+	}
+	if !strings.Contains(err.Error(), "policy changed") {
+		t.Fatalf("error does not disclose committed policy change: %v", err)
+	}
+}
+
+func TestAuditedEditorRecordsFailedRemovalAndChangedRestore(t *testing.T) {
+	id := strings.Repeat("e", 32)
+	t.Run("failed removal", func(t *testing.T) {
+		editor := &fakeMutationEditor{err: errPolicyUpdate}
+		logger := &fakeMutationLogger{}
+		audited := newAuditedEditor(editor, logger, 0, func() (string, error) { return id, nil })
+
+		if _, err := audited.RemoveProject("project", ""); !errors.Is(err, errPolicyUpdate) {
+			t.Fatalf("RemoveProject error = %v", err)
+		}
+		if got := logger.finishes[0].Outcome; got != MutationFailed {
+			t.Fatalf("outcome = %q, want %q", got, MutationFailed)
+		}
+	})
+
+	t.Run("changed restore", func(t *testing.T) {
+		editor := &fakeMutationEditor{recoveryResult: RecoveryResult{Changed: true, RecoveryID: id}}
+		logger := &fakeMutationLogger{}
+		audited := NewAuditedEditor(editor, logger, 0)
+
+		result, err := audited.RestoreProject(id, "project")
+		if err != nil {
+			t.Fatalf("RestoreProject: %v", err)
+		}
+		if !result.Changed || result.RecoveryID != id {
+			t.Fatalf("result = %#v", result)
+		}
+		wantStart := MutationStart{
+			ActorUID:   0,
+			Project:    "project",
+			Operation:  MutationRestoreProject,
+			RecoveryID: id,
+		}
+		if !reflect.DeepEqual(logger.starts, []MutationStart{wantStart}) {
+			t.Fatalf("starts = %#v, want %#v", logger.starts, []MutationStart{wantStart})
+		}
+		if got := logger.finishes[0].Outcome; got != MutationChanged {
+			t.Fatalf("outcome = %q, want %q", got, MutationChanged)
+		}
+	})
+}
+
 func TestAuditedEditorRecordsNoChangeAndFailureOutcomes(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -224,6 +353,9 @@ func TestAuditedEditorDoesNotAuditReadOnlyOperations(t *testing.T) {
 	}
 	if _, err := audited.ListAllowlist("project"); err != nil {
 		t.Fatalf("ListAllowlist: %v", err)
+	}
+	if _, err := audited.ListRecoveries(); err != nil {
+		t.Fatalf("ListRecoveries: %v", err)
 	}
 	if len(logger.sequence) != 0 {
 		t.Fatalf("read-only operations wrote audit events: %v", logger.sequence)
@@ -340,5 +472,39 @@ func TestMutationJSONLLoggerHashesAllowlistArgv(t *testing.T) {
 	}
 	if !bytes.Contains(data, []byte(`"argv_count":2`)) {
 		t.Fatalf("audit does not contain argv count: %s", data)
+	}
+}
+
+func TestMutationJSONLLoggerRecordsOnlyOpaqueRecoveryMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "admin-audit", "audit.jsonl")
+	logger := NewMutationJSONLLogger(path)
+	id := strings.Repeat("d", 32)
+
+	mutationID, err := logger.Start(context.Background(), MutationStart{
+		ActorUID:   os.Geteuid(),
+		Project:    "project",
+		Operation:  MutationRemoveProject,
+		RecoveryID: id,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := logger.Finish(context.Background(), mutationID, MutationFinish{Outcome: MutationChanged}); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read audit file: %v", err)
+	}
+	for _, want := range []string{MutationRemoveProject, id, `"project":"project"`, `"outcome":"changed"`} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Fatalf("audit missing %q: %s", want, data)
+		}
+	}
+	for _, forbidden := range []string{"before_sha256", "after_sha256", "artifact", "working_dir", "bws_project_id", "token_entry", "argv"} {
+		if bytes.Contains(data, []byte(forbidden)) {
+			t.Fatalf("audit contains forbidden field %q: %s", forbidden, data)
+		}
 	}
 }

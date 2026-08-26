@@ -165,6 +165,10 @@ sudo secrets-broker-admin projects allowlist add omada-read -- \
   /usr/local/libexec/secrets-broker-ops/omada-acl
 sudo secrets-broker-admin projects allowlist remove omada-read -- \
   /usr/local/libexec/secrets-broker-ops/omada-acl
+
+sudo secrets-broker-admin projects remove github-ops --confirm github-ops
+sudo secrets-broker-admin projects recovery list
+sudo secrets-broker-admin projects recovery restore RECOVERY_ID --confirm github-ops
 ```
 
 Project creation requires every deployment identifier and an absolute working directory. It always
@@ -188,22 +192,67 @@ permissions. A failed validation leaves the original policy in place. Approval e
 existing array-of-tables policy layout, and allowlist removal also requires each `argv` field on one
 line.
 
-Every requested project creation, approval, or allowlist mutation writes a root-owned audit start
-record before the policy editor runs, followed by a `changed`, `no_change`, or `failed` finish
-record. A failed start record prevents the policy operation. If the policy replacement succeeds but
-the finish record fails, the command reports that the policy changed and leaves the unmatched start
+Project removal requires the alias twice and refuses to remove the last configured project. Before
+changing policy, it publishes a root-only recovery artifact under
+`/var/lib/secrets-broker-admin/recovery`. The artifact retains the exact pre-removal policy bytes,
+so it has the same confidentiality as the policy. `projects recovery list` prints only its opaque
+ID, project alias, and creation time.
+
+Restore writes the exact saved bytes only while the current policy still matches the state created
+by that removal. Any later policy edit, including recreation of the same alias, blocks automatic
+restore and requires manual reconciliation by root. Recovery artifacts remain after restore and
+are not automatically pruned. Removal changes only local broker policy. It does not delete a BWS
+project or secret, revoke access, or stop a command that already passed policy.
+
+For live acceptance after installing a release, use a deliberately disposable local project. This
+does not contact BWS unless somebody later attempts to run the project:
+
+```bash
+set -euo pipefail
+accept_alias=broker-removal-acceptance
+admin=/usr/local/sbin/secrets-broker-admin
+
+sudo "$admin" projects create "$accept_alias" \
+  --bws-project-id 00000000-0000-0000-0000-000000000001 \
+  --token-entry recovery-acceptance-unused \
+  --working-dir "$(pwd -P)"
+created_policy="$(sudo sha256sum /etc/secrets-broker/policy.toml)"
+
+remove_output="$(sudo "$admin" projects remove "$accept_alias" --confirm "$accept_alias")"
+printf '%s\n' "$remove_output"
+recovery_id="${remove_output##*Recovery ID: }"
+recovery_id="${recovery_id%.}"
+[[ "$recovery_id" =~ ^[0-9a-f]{32}$ ]]
+sudo "$admin" projects recovery list | grep -F "$recovery_id"
+
+sudo "$admin" projects recovery restore "$recovery_id" --confirm "$accept_alias"
+test "$created_policy" = "$(sudo sha256sum /etc/secrets-broker/policy.toml)"
+sudo "$admin" projects remove "$accept_alias" --confirm "$accept_alias"
+if sudo "$admin" projects list | grep -Fq "$accept_alias"; then
+  echo "Disposable project was not removed." >&2
+  exit 1
+fi
+```
+
+Every requested project creation, removal, restoration, approval, or allowlist mutation writes a
+root-owned audit start record before the policy editor runs, followed by a `changed`, `no_change`,
+or `failed` finish record. A failed start record prevents the policy operation. If the policy
+replacement succeeds but the finish record fails, the command reports that the policy changed and
+leaves the unmatched start
 record for recovery. Read-only administrator commands do not write this log.
 
 Administrator audit records contain the effective UID, project alias, operation, requested
 approval mode or a SHA-256 digest and count of the exact argv, outcome, timestamps, and a
-correlation ID. Project creation records identify the alias, operation, and fixed `confirm` mode,
+correlation ID. Removal and restoration records also include the opaque recovery ID. Project
+creation records identify the alias, operation, and fixed `confirm` mode,
 but omit the supplied BWS project ID, token entry, and working directory. Records do not contain raw
 argv, policy contents, tokens, secret names, secret values, or raw failure text. The fixed
 administrator audit path is
 `/var/log/secrets-broker-admin/audit.jsonl`, owned by `root:root` and separate from the worker-owned
 execution audit. See
-[ADR-0017](decisions/0017-root-owned-administrator-mutation-audit.md) and
-[ADR-0018](decisions/0018-safe-root-only-project-creation.md).
+[ADR-0017](decisions/0017-root-owned-administrator-mutation-audit.md),
+[ADR-0018](decisions/0018-safe-root-only-project-creation.md), and
+[ADR-0019](decisions/0019-recoverable-root-only-project-removal.md).
 
 The check validates accounts, group membership, ACLs, fixed paths, ownership, modes, sudoers
 syntax, template completion, and installed CLI, `bws`, and sudo versions. It also invokes the

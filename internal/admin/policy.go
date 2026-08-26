@@ -48,10 +48,24 @@ type ProjectInput struct {
 type Editor struct {
 	path          string
 	expectedOwner uint32
+	recovery      RecoveryArtifacts
+	beforeWrite   func()
 }
 
 func NewEditor(path string, expectedOwner uint32) *Editor {
 	return &Editor{path: path, expectedOwner: expectedOwner}
+}
+
+func NewRecoveryEditor(path, recoveryDir string, expectedOwner, expectedGroup uint32) *Editor {
+	return newEditorWithRecovery(
+		path,
+		expectedOwner,
+		NewRecoveryStore(recoveryDir, expectedOwner, expectedGroup),
+	)
+}
+
+func newEditorWithRecovery(path string, expectedOwner uint32, recovery RecoveryArtifacts) *Editor {
+	return &Editor{path: path, expectedOwner: expectedOwner, recovery: recovery}
 }
 
 func (e *Editor) ListProjects() ([]ProjectSummary, error) {
@@ -249,6 +263,134 @@ func (e *Editor) RemoveAllowlist(alias string, argv []string) (bool, error) {
 	return true, nil
 }
 
+func (e *Editor) RemoveProject(alias, confirmation, recoveryID string) (RecoveryResult, error) {
+	if e.recovery == nil {
+		return RecoveryResult{}, errors.New("project recovery is not configured")
+	}
+	if confirmation == "" {
+		return RecoveryResult{}, errors.New("project confirmation is required")
+	}
+	if confirmation != alias {
+		return RecoveryResult{}, errors.New("project confirmation must exactly match the selected alias")
+	}
+	if err := validateRecoveryID(recoveryID); err != nil {
+		return RecoveryResult{}, err
+	}
+
+	data, cfg, metadata, err := e.readPolicy()
+	if err != nil {
+		return RecoveryResult{}, err
+	}
+	projectIndex, err := findProject(cfg, alias)
+	if err != nil {
+		return RecoveryResult{}, err
+	}
+	if len(cfg.Projects) == 1 {
+		return RecoveryResult{}, errors.New("cannot remove the last configured project")
+	}
+
+	updated, err := removeProjectSpan(data, len(cfg.Projects), projectIndex)
+	if err != nil {
+		return RecoveryResult{}, err
+	}
+	updatedConfig, err := config.Parse(updated)
+	if err != nil {
+		return RecoveryResult{}, fmt.Errorf("validating updated policy: %w", err)
+	}
+	if err := updatedConfig.ValidateWorker(); err != nil {
+		return RecoveryResult{}, fmt.Errorf("validating updated worker policy: %w", err)
+	}
+	expected := *cfg
+	expected.Projects = append([]config.Project(nil), cfg.Projects[:projectIndex]...)
+	expected.Projects = append(expected.Projects, cfg.Projects[projectIndex+1:]...)
+	if !reflect.DeepEqual(&expected, updatedConfig) {
+		return RecoveryResult{}, errors.New("updated policy changed fields outside the selected project")
+	}
+
+	if err := e.recovery.Publish(RecoveryArtifactInput{
+		RecoveryID: recoveryID,
+		Project:    alias,
+		Before:     data,
+		After:      updated,
+	}); err != nil {
+		return RecoveryResult{}, fmt.Errorf("publishing project recovery artifact: %w", err)
+	}
+	result := RecoveryResult{RecoveryID: recoveryID}
+	if e.beforeWrite != nil {
+		e.beforeWrite()
+	}
+	if err := e.writeAtomic(updated, metadata); err != nil {
+		return result, err
+	}
+	result.Changed = true
+	return result, nil
+}
+
+func (e *Editor) ListRecoveries() ([]RecoverySummary, error) {
+	if e.recovery == nil {
+		return nil, errors.New("project recovery is not configured")
+	}
+	return e.recovery.List()
+}
+
+func (e *Editor) RestoreProject(recoveryID, confirmation string) (RecoveryResult, error) {
+	if e.recovery == nil {
+		return RecoveryResult{}, errors.New("project recovery is not configured")
+	}
+	if confirmation == "" {
+		return RecoveryResult{}, errors.New("project confirmation is required")
+	}
+	artifact, err := e.recovery.Read(recoveryID)
+	if err != nil {
+		return RecoveryResult{}, err
+	}
+	result := RecoveryResult{RecoveryID: recoveryID}
+	if confirmation != artifact.Project {
+		return result, errors.New("project confirmation must exactly match the recovery artifact alias")
+	}
+
+	currentData, currentConfig, metadata, err := e.readPolicy()
+	if err != nil {
+		return result, err
+	}
+	if digestBytes(currentData) != artifact.AfterSHA256 {
+		return result, errors.New("policy changed since removal; automatic restore is not allowed")
+	}
+
+	storedConfig, err := config.Parse(artifact.Policy)
+	if err != nil {
+		return result, fmt.Errorf("validating stored policy: %w", err)
+	}
+	if err := storedConfig.ValidateWorker(); err != nil {
+		return result, fmt.Errorf("validating stored worker policy: %w", err)
+	}
+	projectIndex, err := findProject(storedConfig, artifact.Project)
+	if err != nil {
+		return result, errors.New("recovery artifact does not contain the confirmed project")
+	}
+	expected := *storedConfig
+	expected.Projects = append([]config.Project(nil), storedConfig.Projects[:projectIndex]...)
+	expected.Projects = append(expected.Projects, storedConfig.Projects[projectIndex+1:]...)
+	if !reflect.DeepEqual(&expected, currentConfig) {
+		return result, errors.New("recovery artifact does not differ by exactly the confirmed project")
+	}
+	removed, err := removeProjectSpan(artifact.Policy, len(storedConfig.Projects), projectIndex)
+	if err != nil {
+		return result, fmt.Errorf("validating stored policy layout: %w", err)
+	}
+	if !bytes.Equal(removed, currentData) {
+		return result, errors.New("recovery artifact does not reproduce the current policy")
+	}
+	if e.beforeWrite != nil {
+		e.beforeWrite()
+	}
+	if err := e.writeAtomic(artifact.Policy, metadata); err != nil {
+		return result, err
+	}
+	result.Changed = true
+	return result, nil
+}
+
 func validateProjectInput(input ProjectInput) error {
 	if input.Alias == "" {
 		return errors.New("project alias is required")
@@ -375,6 +517,12 @@ func (e *Editor) writeAtomic(data []byte, original fileMetadata) error {
 	if len(data) > maxPolicyBytes {
 		return fmt.Errorf("updated policy exceeds maximum size of %d bytes", maxPolicyBytes)
 	}
+	lock, err := lockPolicy(e.path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
+
 	current, err := e.metadata()
 	if err != nil {
 		return err
@@ -444,6 +592,19 @@ func (e *Editor) writeAtomic(data []byte, original fileMetadata) error {
 		return fmt.Errorf("syncing policy directory: %w", err)
 	}
 	return nil
+}
+
+func lockPolicy(path string) (*os.File, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("opening policy for mutation lock: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("locking policy for mutation: %w", err)
+	}
+	return file, nil
 }
 
 func replaceApproval(data []byte, projectCount, projectIndex int, approval string) ([]byte, error) {
@@ -570,6 +731,22 @@ func removeAllowEntries(data []byte, projectCount, projectIndex, allowCount int,
 	}
 	updated = append(updated, data[cursor:]...)
 	return updated, nil
+}
+
+func removeProjectSpan(data []byte, projectCount, projectIndex int) ([]byte, error) {
+	headers := projectHeaderPattern.FindAllIndex(data, -1)
+	if len(headers) != projectCount {
+		return nil, errors.New("policy layout is not editable: expected one [[projects]] block per project")
+	}
+	if projectIndex < 0 || projectIndex >= len(headers) {
+		return nil, errors.New("selected project is outside the editable policy layout")
+	}
+	end := len(data)
+	if projectIndex+1 < len(headers) {
+		end = headers[projectIndex+1][0]
+	}
+	updated := append([]byte(nil), data[:headers[projectIndex][0]]...)
+	return append(updated, data[end:]...), nil
 }
 
 func projectBlockBounds(data []byte, projectCount, projectIndex int) (int, int, error) {

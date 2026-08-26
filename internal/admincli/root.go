@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"text/tabwriter"
+	"time"
 
 	"github.com/R055LE/secrets-broker/internal/admin"
 	"github.com/spf13/cobra"
@@ -16,6 +17,7 @@ import (
 const (
 	policyPath     = "/etc/secrets-broker/policy.toml"
 	adminAuditPath = "/var/log/secrets-broker-admin/audit.jsonl"
+	recoveryPath   = "/var/lib/secrets-broker-admin/recovery"
 )
 
 type projectEditor interface {
@@ -25,10 +27,13 @@ type projectEditor interface {
 	SetApproval(alias, mode string) (bool, error)
 	AddAllowlist(alias string, argv []string) (bool, error)
 	RemoveAllowlist(alias string, argv []string) (bool, error)
+	RemoveProject(alias, confirmation string) (admin.RecoveryResult, error)
+	ListRecoveries() ([]admin.RecoverySummary, error)
+	RestoreProject(recoveryID, confirmation string) (admin.RecoveryResult, error)
 }
 
 func Execute() int {
-	policyEditor := admin.NewEditor(policyPath, 0)
+	policyEditor := admin.NewRecoveryEditor(policyPath, recoveryPath, 0, 0)
 	auditLogger := admin.NewMutationJSONLLogger(adminAuditPath)
 	editor := admin.NewAuditedEditor(policyEditor, auditLogger, os.Geteuid())
 	return execute(os.Geteuid, editor, os.Args[1:], os.Stdout, os.Stderr)
@@ -116,6 +121,78 @@ func newRootCommand(euid func() int, editor projectEditor, stdout io.Writer) *co
 	create.Flags().StringVar(&createTokenEntry, "token-entry", "", "Bitwarden Secrets Manager access-token secret name")
 	create.Flags().StringVar(&createWorkingDir, "working-dir", "", "absolute allowed working directory")
 	projects.AddCommand(create)
+	var removeConfirmation string
+	remove := &cobra.Command{
+		Use:   "remove ALIAS --confirm ALIAS",
+		Short: "Remove one project after publishing a recovery artifact",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			result, err := editor.RemoveProject(args[0], removeConfirmation)
+			if err != nil {
+				return recoveryMutationError(err, result)
+			}
+			if !result.Changed || result.RecoveryID == "" {
+				return fmt.Errorf("project %q was not removed", args[0])
+			}
+			_, _ = fmt.Fprintf(stdout, "Project %q removed. Recovery ID: %s\n", args[0], result.RecoveryID)
+			return nil
+		},
+	}
+	remove.Flags().StringVar(&removeConfirmation, "confirm", "", "repeat the exact project alias")
+	projects.AddCommand(remove)
+
+	recovery := &cobra.Command{
+		Use:   "recovery",
+		Short: "List and restore protected project recovery artifacts",
+	}
+	recovery.AddCommand(&cobra.Command{
+		Use:   "list",
+		Short: "List project recovery metadata",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			items, err := editor.ListRecoveries()
+			if err != nil {
+				return err
+			}
+			writer := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+			_, _ = fmt.Fprintln(writer, "RECOVERY_ID\tALIAS\tCREATED_AT")
+			for _, item := range items {
+				_, _ = fmt.Fprintf(
+					writer,
+					"%s\t%s\t%s\n",
+					item.RecoveryID,
+					item.Project,
+					item.CreatedAt.UTC().Format(time.RFC3339Nano),
+				)
+			}
+			return writer.Flush()
+		},
+	})
+	var restoreConfirmation string
+	restore := &cobra.Command{
+		Use:   "restore RECOVERY_ID --confirm ALIAS",
+		Short: "Restore exact policy bytes when policy is unchanged since removal",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			result, err := editor.RestoreProject(args[0], restoreConfirmation)
+			if err != nil {
+				return recoveryMutationError(err, result)
+			}
+			if !result.Changed {
+				return fmt.Errorf("recovery artifact %q was not restored", args[0])
+			}
+			_, _ = fmt.Fprintf(
+				stdout,
+				"Project %q restored from recovery ID %s.\n",
+				restoreConfirmation,
+				args[0],
+			)
+			return nil
+		},
+	}
+	restore.Flags().StringVar(&restoreConfirmation, "confirm", "", "repeat the exact recovered project alias")
+	recovery.AddCommand(restore)
+	projects.AddCommand(recovery)
 	projects.AddCommand(&cobra.Command{
 		Use:   "set-approval ALIAS MODE",
 		Short: "Set a project to automatic or confirm mode",
@@ -204,4 +281,11 @@ func newRootCommand(euid func() int, editor projectEditor, stdout io.Writer) *co
 	projects.AddCommand(allowlist)
 	root.AddCommand(projects)
 	return root
+}
+
+func recoveryMutationError(err error, result admin.RecoveryResult) error {
+	if result.RecoveryID == "" {
+		return err
+	}
+	return fmt.Errorf("%w; recovery ID: %s", err, result.RecoveryID)
 }
