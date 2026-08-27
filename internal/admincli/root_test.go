@@ -2,12 +2,15 @@ package admincli
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/R055LE/secrets-broker/internal/accessdiag"
 	"github.com/R055LE/secrets-broker/internal/admin"
 )
 
@@ -25,6 +28,33 @@ type fakeProjectEditor struct {
 	recoveryID     string
 	confirmation   string
 	calls          int
+}
+
+type fakeAccessChecker struct {
+	result  accessdiag.Result
+	err     error
+	aliases []string
+}
+
+func (c *fakeAccessChecker) Run(
+	_ context.Context,
+	alias string,
+	consume func(accessdiag.Result) error,
+) (accessdiag.Outcome, error) {
+	c.aliases = append(c.aliases, alias)
+	if c.err != nil {
+		return "", c.err
+	}
+	if err := consume(c.result); err != nil {
+		return c.result.Outcome, err
+	}
+	return c.result.Outcome, nil
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, io.ErrClosedPipe
 }
 
 func (f *fakeProjectEditor) ListProjects() ([]admin.ProjectSummary, error) {
@@ -99,6 +129,106 @@ func TestProjectsList(t *testing.T) {
 			t.Errorf("output missing %q:\n%s", want, stdout.String())
 		}
 	}
+}
+
+func TestProjectsAccessCheckRendersOnlyApprovedColumnsAndExitStatus(t *testing.T) {
+	tests := []struct {
+		name     string
+		alias    string
+		status   accessdiag.Status
+		wantCode int
+	}{
+		{name: "all accessible", status: accessdiag.StatusAccessible, wantCode: 0},
+		{name: "remote failure", alias: "github-ops", status: accessdiag.StatusInaccessible, wantCode: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			projects := []accessdiag.ProjectResult{{
+				Alias: "github-ops", BWSProjectID: "11111111-1111-1111-1111-111111111111", Status: tt.status,
+			}}
+			checker := &fakeAccessChecker{result: accessdiag.Result{
+				Version: accessdiag.Version, Outcome: accessdiag.Aggregate(projects), Projects: projects,
+			}}
+			args := []string{"projects", "access", "check"}
+			if tt.alias != "" {
+				args = append(args, tt.alias)
+			}
+			var stdout, stderr bytes.Buffer
+			code := executeWithAccess(func() int { return 0 }, &fakeProjectEditor{}, checker, args, &stdout, &stderr)
+			if code != tt.wantCode || stderr.Len() != 0 {
+				t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+			}
+			if !reflect.DeepEqual(checker.aliases, []string{tt.alias}) {
+				t.Fatalf("aliases = %#v", checker.aliases)
+			}
+			lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+			if len(lines) != 2 || !reflect.DeepEqual(strings.Fields(lines[0]), []string{"ALIAS", "BWS_PROJECT_ID", "STATUS"}) {
+				t.Fatalf("output = %q", stdout.String())
+			}
+			if !reflect.DeepEqual(strings.Fields(lines[1]), []string{"github-ops", "11111111-1111-1111-1111-111111111111", string(tt.status)}) {
+				t.Fatalf("row = %q", lines[1])
+			}
+			for _, forbidden := range []string{"token_entry", "working_dir", "allowlist", "secret"} {
+				if strings.Contains(strings.ToLower(stdout.String()), forbidden) {
+					t.Fatalf("output contains %q: %s", forbidden, stdout.String())
+				}
+			}
+		})
+	}
+}
+
+func TestProjectsAccessCheckRejectsInvalidUseBeforeWorker(t *testing.T) {
+	tests := []struct {
+		name string
+		euid int
+		args []string
+	}{
+		{name: "non-root", euid: 1000, args: []string{"projects", "access", "check"}},
+		{name: "too many aliases", euid: 0, args: []string{"projects", "access", "check", "one", "two"}},
+		{name: "timeout override", euid: 0, args: []string{"projects", "access", "check", "--timeout", "1s"}},
+		{name: "worker override", euid: 0, args: []string{"projects", "access", "check", "--worker", "/tmp/worker"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checker := &fakeAccessChecker{}
+			var stdout, stderr bytes.Buffer
+			code := executeWithAccess(func() int { return tt.euid }, &fakeProjectEditor{}, checker, tt.args, &stdout, &stderr)
+			if code != 2 || len(checker.aliases) != 0 || stdout.Len() != 0 {
+				t.Fatalf("code = %d, calls = %#v, stdout = %q", code, checker.aliases, stdout.String())
+			}
+		})
+	}
+}
+
+func TestProjectsAccessCheckReturnsTwoForLocalOrOutputFailure(t *testing.T) {
+	t.Run("local", func(t *testing.T) {
+		checker := &fakeAccessChecker{err: errors.New("worker access diagnostic failed")}
+		var stdout, stderr bytes.Buffer
+		code := executeWithAccess(
+			func() int { return 0 }, &fakeProjectEditor{}, checker,
+			[]string{"projects", "access", "check"}, &stdout, &stderr,
+		)
+		if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "access diagnostic failed") {
+			t.Fatalf("code = %d, stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("output", func(t *testing.T) {
+		projects := []accessdiag.ProjectResult{{Alias: "project", BWSProjectID: "id", Status: accessdiag.StatusAccessible}}
+		checker := &fakeAccessChecker{result: accessdiag.Result{
+			Version: accessdiag.Version, Outcome: accessdiag.Aggregate(projects), Projects: projects,
+		}}
+		var stderr bytes.Buffer
+		code := executeWithAccess(
+			func() int { return 0 }, &fakeProjectEditor{}, checker,
+			[]string{"projects", "access", "check"}, failingWriter{}, &stderr,
+		)
+		if code != 2 || !strings.Contains(stderr.String(), "writing access diagnostic") {
+			t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+		}
+	})
 }
 
 func TestProjectsSetApproval(t *testing.T) {

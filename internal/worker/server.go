@@ -29,13 +29,17 @@ type Server struct {
 	ConfigPath   string
 	AuditLogPath string
 	ExecRunner   execx.Runner
+
+	accessTimeout    time.Duration
+	newTokenResolver func(string) token.Resolver
 }
 
 func NewServer() *Server {
 	return &Server{
-		ConfigPath:   DefaultConfigPath,
-		AuditLogPath: DefaultAuditLogPath,
-		ExecRunner:   execx.OSRunner{},
+		ConfigPath:    DefaultConfigPath,
+		AuditLogPath:  DefaultAuditLogPath,
+		ExecRunner:    execx.OSRunner{},
+		accessTimeout: 30 * time.Second,
 	}
 }
 

@@ -160,6 +160,9 @@ sudo secrets-broker-admin projects create github-ops \
 sudo secrets-broker-admin projects set-approval omada-read confirm
 sudo secrets-broker-admin projects set-approval omada-read automatic
 
+sudo secrets-broker-admin projects access check
+sudo secrets-broker-admin projects access check omada-read
+
 sudo secrets-broker-admin projects allowlist list omada-read
 sudo secrets-broker-admin projects allowlist add omada-read -- \
   /usr/local/libexec/secrets-broker-ops/omada-acl
@@ -180,6 +183,13 @@ worker's BWS access token, or broaden that token's project grants.
 allowlist match runs without a prompt; unlisted commands remain denied. The broader legacy modes
 are shown as `prompt-unlisted` and `prompt-any` by `projects list`, but this command deliberately
 cannot select them.
+
+The access diagnostic uses the deployed worker token to ask Bitwarden for either every configured
+project or one exact alias. It reports only `ALIAS`, `BWS_PROJECT_ID`, and `STATUS`. Exit status `0`
+means every selected project was accessible, `1` means the check completed with an inaccessible or
+remote-error result, and `2` means a local or audit failure prevented a trusted complete result.
+Unlike the installer check, this command reads the token and contacts Bitwarden. It does not request
+approval, retrieve secrets, or run an allowlisted command.
 
 Allowlist entries are argv arrays, not shell strings. `--` separates the administrator command from
 the exact argv being stored, including any arguments that begin with `-`. Adding an existing entry
@@ -234,12 +244,12 @@ if sudo "$admin" projects list | grep -Fq "$accept_alias"; then
 fi
 ```
 
-Every requested project creation, removal, restoration, approval, or allowlist mutation writes a
-root-owned audit start record before the policy editor runs, followed by a `changed`, `no_change`,
-or `failed` finish record. A failed start record prevents the policy operation. If the policy
-replacement succeeds but the finish record fails, the command reports that the policy changed and
-leaves the unmatched start
-record for recovery. Read-only administrator commands do not write this log.
+Every requested project creation, removal, restoration, approval, allowlist mutation, or BWS access
+diagnostic writes a root-owned audit start record before the policy editor or worker runs, followed
+by a `changed`, `no_change`, `failed`, or diagnostic aggregate finish record. A failed start record
+prevents the policy or diagnostic operation. If the policy replacement succeeds but the finish
+record fails, the command reports that the policy changed and leaves the unmatched start record for
+recovery. Project and recovery listings do not write this log.
 
 Administrator audit records contain the effective UID, project alias, operation, requested
 approval mode or a SHA-256 digest and count of the exact argv, outcome, timestamps, and a
@@ -252,7 +262,9 @@ administrator audit path is
 execution audit. See
 [ADR-0017](decisions/0017-root-owned-administrator-mutation-audit.md),
 [ADR-0018](decisions/0018-safe-root-only-project-creation.md), and
-[ADR-0019](decisions/0019-recoverable-root-only-project-removal.md).
+[ADR-0019](decisions/0019-recoverable-root-only-project-removal.md). The access diagnostic's
+privilege, privacy, classification, and audit boundaries are in
+[ADR-0020](decisions/0020-secret-free-bws-project-access-diagnostic.md).
 
 The check validates accounts, group membership, ACLs, fixed paths, ownership, modes, sudoers
 syntax, template completion, and installed CLI, `bws`, and sudo versions. It also invokes the

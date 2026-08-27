@@ -10,7 +10,9 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/R055LE/secrets-broker/internal/accessdiag"
 	"github.com/R055LE/secrets-broker/internal/admin"
+	"github.com/R055LE/secrets-broker/internal/execx"
 	"github.com/spf13/cobra"
 )
 
@@ -36,11 +38,29 @@ func Execute() int {
 	policyEditor := admin.NewRecoveryEditor(policyPath, recoveryPath, 0, 0)
 	auditLogger := admin.NewMutationJSONLLogger(adminAuditPath)
 	editor := admin.NewAuditedEditor(policyEditor, auditLogger, os.Geteuid())
-	return execute(os.Geteuid, editor, os.Args[1:], os.Stdout, os.Stderr)
+	diagnostic := admin.NewAuditedAccessDiagnostic(
+		admin.NewWorkerAccessChecker(execx.OSRunner{}),
+		auditLogger,
+		os.Geteuid(),
+	)
+	return executeWithAccess(os.Geteuid, editor, diagnostic, os.Args[1:], os.Stdout, os.Stderr)
 }
 
 func execute(euid func() int, editor projectEditor, args []string, stdout, stderr io.Writer) int {
-	root := newRootCommand(euid, editor, stdout)
+	return executeWithAccess(euid, editor, unavailableAccessDiagnostic{}, args, stdout, stderr)
+}
+
+func executeWithAccess(
+	euid func() int,
+	editor projectEditor,
+	diagnostic admin.AccessDiagnostic,
+	args []string,
+	stdout, stderr io.Writer,
+) int {
+	diagnosticFailed := false
+	root := newRootCommandWithAccess(euid, editor, diagnostic, stdout, func() {
+		diagnosticFailed = true
+	})
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
@@ -49,10 +69,23 @@ func execute(euid func() int, editor projectEditor, args []string, stdout, stder
 		_, _ = fmt.Fprintln(stderr, "secrets-broker-admin:", err)
 		return 2
 	}
+	if diagnosticFailed {
+		return 1
+	}
 	return 0
 }
 
 func newRootCommand(euid func() int, editor projectEditor, stdout io.Writer) *cobra.Command {
+	return newRootCommandWithAccess(euid, editor, unavailableAccessDiagnostic{}, stdout, func() {})
+}
+
+func newRootCommandWithAccess(
+	euid func() int,
+	editor projectEditor,
+	diagnostic admin.AccessDiagnostic,
+	stdout io.Writer,
+	onDiagnosticFailure func(),
+) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "secrets-broker-admin",
 		Short:         "Administer the fixed Secrets Broker worker policy",
@@ -140,6 +173,51 @@ func newRootCommand(euid func() int, editor projectEditor, stdout io.Writer) *co
 	}
 	remove.Flags().StringVar(&removeConfirmation, "confirm", "", "repeat the exact project alias")
 	projects.AddCommand(remove)
+
+	access := &cobra.Command{
+		Use:   "access",
+		Short: "Check Bitwarden project access through the deployed worker",
+	}
+	access.AddCommand(&cobra.Command{
+		Use:   "check [ALIAS]",
+		Short: "Check one or every configured Bitwarden project",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			alias := ""
+			if len(args) == 1 {
+				alias = args[0]
+			}
+			outcome, err := diagnostic.Run(cmd.Context(), alias, func(result accessdiag.Result) error {
+				writer := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+				if _, err := fmt.Fprintln(writer, "ALIAS\tBWS_PROJECT_ID\tSTATUS"); err != nil {
+					return fmt.Errorf("writing access diagnostic: %w", err)
+				}
+				for _, project := range result.Projects {
+					if _, err := fmt.Fprintf(
+						writer,
+						"%s\t%s\t%s\n",
+						project.Alias,
+						project.BWSProjectID,
+						project.Status,
+					); err != nil {
+						return fmt.Errorf("writing access diagnostic: %w", err)
+					}
+				}
+				if err := writer.Flush(); err != nil {
+					return fmt.Errorf("writing access diagnostic: %w", err)
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			if outcome != accessdiag.OutcomeAllAccessible {
+				onDiagnosticFailure()
+			}
+			return nil
+		},
+	})
+	projects.AddCommand(access)
 
 	recovery := &cobra.Command{
 		Use:   "recovery",
@@ -281,6 +359,16 @@ func newRootCommand(euid func() int, editor projectEditor, stdout io.Writer) *co
 	projects.AddCommand(allowlist)
 	root.AddCommand(projects)
 	return root
+}
+
+type unavailableAccessDiagnostic struct{}
+
+func (unavailableAccessDiagnostic) Run(
+	context.Context,
+	string,
+	func(accessdiag.Result) error,
+) (accessdiag.Outcome, error) {
+	return "", fmt.Errorf("access diagnostic unavailable")
 }
 
 func recoveryMutationError(err error, result admin.RecoveryResult) error {
