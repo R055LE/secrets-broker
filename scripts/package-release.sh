@@ -56,7 +56,11 @@ for arch in amd64 arm64; do
     "$stage_dir/bin/secrets-broker-worker" \
     "$stage_dir/bin/secrets-broker-relay"
 
-  install -m 0755 deploy/install-worker.sh deploy/install-relay.sh "$stage_dir/deploy/"
+  install -m 0755 \
+    deploy/install-worker.sh \
+    deploy/install-relay.sh \
+    deploy/upgrade-release.sh \
+    "$stage_dir/deploy/"
   install -m 0644 \
     deploy/secrets-broker-relay.env.example \
     deploy/secrets-broker-relay.service \

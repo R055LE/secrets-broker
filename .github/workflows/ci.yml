@@ -92,6 +92,7 @@ jobs:
               bin/secrets-broker-relay \
               deploy/install-worker.sh \
               deploy/install-relay.sh \
+              deploy/upgrade-release.sh \
               deploy/secrets-broker.logrotate \
               deploy/secrets-broker.sudoers \
               deploy/secrets-broker-relay.service \
@@ -105,8 +106,23 @@ jobs:
 
       - name: Check installer syntax
         run: |
-          bash -n scripts/package-release.sh deploy/install-worker.sh deploy/install-relay.sh
-          shellcheck scripts/package-release.sh deploy/install-worker.sh deploy/install-relay.sh
+          bash -n \
+            scripts/package-release.sh \
+            scripts/testdata/fake-gh \
+            deploy/install-worker.sh \
+            deploy/install-relay.sh \
+            deploy/upgrade-release.sh
+          shellcheck \
+            scripts/package-release.sh \
+            scripts/testdata/fake-gh \
+            deploy/install-worker.sh \
+            deploy/install-relay.sh \
+            deploy/upgrade-release.sh
+          deploy/upgrade-release.sh --help >/dev/null
+          if deploy/upgrade-release.sh worker latest; then
+            echo 'upgrade helper accepted an implicit release' >&2
+            exit 1
+          fi
 
       - name: Install and check worker boundary
         run: |
@@ -360,6 +376,79 @@ jobs:
           sudo "$release_root/deploy/install-relay.sh" install --environment "$test_dir/relay.env"
           test "$environment_before" = "$(sudo sha256sum /etc/secrets-broker-relay/environment)"
           sudo "$release_root/deploy/install-relay.sh" check
+
+      - name: Exercise verified role upgrades
+        env:
+          VERSION: v0.0.0-ci
+        run: |
+          test ! -e /usr/local/sbin/gh
+          test_dir="$(mktemp -d)"
+          trap 'sudo rm -f /usr/local/sbin/gh; rm -rf "$test_dir"' EXIT
+          tar -xzf "dist/secrets-broker-$VERSION-linux-amd64.tar.gz" -C "$test_dir"
+          release_root="$test_dir/secrets-broker-$VERSION-linux-amd64"
+          sudo install -o root -g root -m 0755 scripts/testdata/fake-gh /usr/local/sbin/gh
+
+          if sudo "$release_root/deploy/upgrade-release.sh" worker "$VERSION"; then
+            echo 'upgrade helper accepted root execution' >&2
+            exit 1
+          fi
+
+          sudo /bin/sh -c 'printf "%s\n" "#!/bin/sh" "exit 99" > /usr/local/bin/secrets-broker'
+          sudo chmod 0755 /usr/local/bin/secrets-broker
+          failed_cli_before="$(sudo sha256sum /usr/local/bin/secrets-broker)"
+          if FAKE_GH_RELEASE_DIR="$PWD/dist" \
+            FAKE_GH_LOG="$test_dir/gh-failed.log" \
+            FAKE_GH_VERSION="$VERSION" \
+            FAKE_GH_FAIL_ATTESTATION=1 \
+            "$release_root/deploy/upgrade-release.sh" worker "$VERSION"; then
+            echo 'upgrade helper accepted failed provenance verification' >&2
+            exit 1
+          fi
+          test "$failed_cli_before" = "$(sudo sha256sum /usr/local/bin/secrets-broker)"
+          test "$(wc -l < "$test_dir/gh-failed.log")" = 2
+
+          handoff_dir="$(mktemp -d /tmp/secrets-broker-upgrade.XXXXXX)"
+          cp "dist/secrets-broker-$VERSION-linux-amd64.tar.gz" "$handoff_dir/"
+          handoff_archive="$handoff_dir/secrets-broker-$VERSION-linux-amd64.tar.gz"
+          handoff_digest="$(sha256sum "$handoff_archive" | awk '{print $1}')"
+          printf x >> "$handoff_archive"
+          if sudo /usr/local/bin/secrets-broker-upgrade __install-verified \
+            worker \
+            "$VERSION" \
+            amd64 \
+            "$handoff_archive" \
+            "$handoff_digest" \
+            runner \
+            "$(id -u)"; then
+            echo 'privileged handoff accepted a changed archive' >&2
+            exit 1
+          fi
+          test "$failed_cli_before" = "$(sudo sha256sum /usr/local/bin/secrets-broker)"
+          rm -rf "$handoff_dir"
+
+          policy_before="$(sudo sha256sum /etc/secrets-broker/policy.toml)"
+          token_before="$(sudo sha256sum /var/lib/secrets-broker/bws-access-token)"
+          FAKE_GH_RELEASE_DIR="$PWD/dist" \
+            FAKE_GH_LOG="$test_dir/gh-worker.log" \
+            FAKE_GH_VERSION="$VERSION" \
+            /usr/local/bin/secrets-broker-upgrade worker "$VERSION"
+          test "$policy_before" = "$(sudo sha256sum /etc/secrets-broker/policy.toml)"
+          test "$token_before" = "$(sudo sha256sum /var/lib/secrets-broker/bws-access-token)"
+          test "$(wc -l < "$test_dir/gh-worker.log")" = 2
+          cmp -s "$release_root/bin/secrets-broker" /usr/local/bin/secrets-broker
+          cmp -s "$release_root/bin/secrets-broker-admin" /usr/local/sbin/secrets-broker-admin
+          cmp -s "$release_root/bin/secrets-broker-worker" /usr/local/libexec/secrets-broker-worker
+          cmp -s "$release_root/deploy/upgrade-release.sh" /usr/local/bin/secrets-broker-upgrade
+
+          environment_before="$(sudo sha256sum /etc/secrets-broker-relay/environment)"
+          FAKE_GH_RELEASE_DIR="$PWD/dist" \
+            FAKE_GH_LOG="$test_dir/gh-relay.log" \
+            FAKE_GH_VERSION="$VERSION" \
+            /usr/local/bin/secrets-broker-upgrade relay "$VERSION"
+          test "$environment_before" = "$(sudo sha256sum /etc/secrets-broker-relay/environment)"
+          test "$(wc -l < "$test_dir/gh-relay.log")" = 2
+          cmp -s "$release_root/bin/secrets-broker-relay" /usr/local/bin/secrets-broker-relay
+          cmp -s "$release_root/deploy/upgrade-release.sh" /usr/local/bin/secrets-broker-upgrade
 
   release:
     needs: [build, installer-test]

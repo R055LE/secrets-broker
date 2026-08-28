@@ -65,7 +65,7 @@ tasks:
   check:installers:
     desc: Check release and deployment script syntax
     cmds:
-      - bash -n scripts/package-release.sh deploy/install-worker.sh deploy/install-relay.sh
+      - bash -n scripts/package-release.sh deploy/install-worker.sh deploy/install-relay.sh deploy/upgrade-release.sh
 
   fmt:
     desc: Format all Go files

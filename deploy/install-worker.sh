@@ -14,6 +14,7 @@ readonly RUNNER_HOME=/var/lib/secrets-broker-runner
 readonly CLI_TARGET=/usr/local/bin/secrets-broker
 readonly ADMIN_TARGET=/usr/local/sbin/secrets-broker-admin
 readonly WORKER_TARGET=/usr/local/libexec/secrets-broker-worker
+readonly UPGRADE_TARGET=/usr/local/bin/secrets-broker-upgrade
 readonly BWS_TARGET=/usr/local/bin/bws
 readonly POLICY_TARGET=/etc/secrets-broker/policy.toml
 readonly SUDOERS_TARGET=/etc/sudoers.d/secrets-broker
@@ -42,6 +43,7 @@ bws_source=""
 policy_source="$repo_root/policy.example.toml"
 sudoers_source="$script_dir/secrets-broker.sudoers"
 logrotate_source="$script_dir/secrets-broker.logrotate"
+upgrade_source="$script_dir/upgrade-release.sh"
 
 usage() {
   cat <<'EOF'
@@ -231,6 +233,7 @@ install_worker() {
   require_executable_source "$cli_source" "CLI source"
   require_executable_source "$admin_source" "administrator CLI source"
   require_executable_source "$worker_source" "worker source"
+  require_executable_source "$upgrade_source" "upgrade helper source"
   require_source_file "$policy_source" "policy source"
   require_source_file "$sudoers_source" "sudoers source"
   require_source_file "$logrotate_source" "logrotate source"
@@ -283,6 +286,7 @@ install_worker() {
   install -D -o root -g root -m 0755 "$cli_source" "$CLI_TARGET"
   install -D -o root -g root -m 0755 "$admin_source" "$ADMIN_TARGET"
   install -D -o root -g root -m 0755 "$worker_source" "$WORKER_TARGET"
+  install -D -o root -g root -m 0755 "$upgrade_source" "$UPGRADE_TARGET"
   if [[ -n "$bws_source" ]]; then
     install -D -o root -g root -m 0755 "$bws_source" "$BWS_TARGET"
   else
@@ -354,6 +358,7 @@ check_worker() {
   check_regular_file "$CLI_TARGET" root root 755
   check_regular_file "$ADMIN_TARGET" root root 755
   check_regular_file "$WORKER_TARGET" root root 755
+  check_regular_file "$UPGRADE_TARGET" root root 755
   check_regular_file "$BWS_TARGET" root root 755
   check_regular_file "$POLICY_TARGET" root "$WORKER_USER" 640
   check_regular_file "$SUDOERS_TARGET" root root 440
@@ -376,6 +381,7 @@ check_worker() {
   ! grep -Eq 'PASTE-|YOUR-' "$POLICY_TARGET" || fail "$POLICY_TARGET still contains template placeholders"
   cmp -s "$SUDOERS_TARGET" "$sudoers_source" || fail "$SUDOERS_TARGET differs from the bundled policy"
   cmp -s "$LOGROTATE_TARGET" "$logrotate_source" || fail "$LOGROTATE_TARGET differs from the bundled policy"
+  cmp -s "$UPGRADE_TARGET" "$upgrade_source" || fail "$UPGRADE_TARGET differs from the bundled helper"
   visudo -cf "$SUDOERS_TARGET" >/dev/null
   logrotate --debug "$LOGROTATE_TARGET" >/dev/null 2>&1 || fail "$LOGROTATE_TARGET is invalid"
   getfacl -cp "$client_home" | grep -Fxq "user:$WORKER_USER:--x" ||
