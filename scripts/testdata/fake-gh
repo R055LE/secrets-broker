@@ -1,0 +1,51 @@
+#!/bin/sh
+
+set -eu
+
+: "${FAKE_GH_RELEASE_DIR:?}"
+: "${FAKE_GH_LOG:?}"
+: "${FAKE_GH_VERSION:?}"
+
+printf '%s\n' "$*" >>"$FAKE_GH_LOG"
+
+if [ "$#" -eq 11 ] &&
+  [ "$1" = release ] &&
+  [ "$2" = download ] &&
+  [ "$3" = "$FAKE_GH_VERSION" ] &&
+  [ "$4" = --repo ] &&
+  [ "$5" = R055LE/secrets-broker ] &&
+  [ "$6" = --pattern ] &&
+  [ "$7" = checksums.txt ] &&
+  [ "$8" = --pattern ] &&
+  [ "${10}" = --dir ]; then
+  cp "$FAKE_GH_RELEASE_DIR/checksums.txt" "${11}/"
+  cp "$FAKE_GH_RELEASE_DIR/$9" "${11}/"
+  exit 0
+fi
+
+if [ "$#" -eq 14 ] &&
+  [ "$1" = attestation ] &&
+  [ "$2" = verify ] &&
+  [ "$4" = --repo ] &&
+  [ "$5" = R055LE/secrets-broker ] &&
+  [ "$6" = --signer-workflow ] &&
+  [ "$7" = R055LE/secrets-broker/.github/workflows/ci.yml ] &&
+  [ "$8" = --source-ref ] &&
+  [ "$9" = "refs/tags/$FAKE_GH_VERSION" ] &&
+  [ "${10}" = --deny-self-hosted-runners ] &&
+  [ "${11}" = --format ] &&
+  [ "${12}" = json ] &&
+  [ "${13}" = --jq ] &&
+  [ "${14}" = length ]; then
+  if [ "${FAKE_GH_FAIL_ATTESTATION:-0}" = 1 ]; then
+    printf '%s\n' 'simulated attestation failure' >&2
+    exit 1
+  fi
+  printf '%s\n' "${FAKE_GH_ATTESTATION_COUNT:-1}"
+  exit 0
+fi
+
+printf 'unexpected gh invocation:' >&2
+printf ' %s' "$@" >&2
+printf '\n' >&2
+exit 2

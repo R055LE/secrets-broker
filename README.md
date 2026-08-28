@@ -145,6 +145,29 @@ Run the read-only deployment check after policy and token provisioning:
 sudo deploy/install-worker.sh check --client-user "$USER"
 ```
 
+### Upgrade an installed role
+
+After the first release containing `/usr/local/bin/secrets-broker-upgrade` is installed, later
+upgrades use one role-explicit command on each device:
+
+```bash
+secrets-broker-upgrade worker vMAJOR.MINOR.PATCH
+secrets-broker-upgrade relay vMAJOR.MINOR.PATCH
+```
+
+Run the worker form on the worker host and the relay form on the separate relay device. The helper
+requires an explicit release and detects amd64 or arm64. It downloads the matching archive and
+checksums as the current user, verifies the checksum and the repository, workflow, tag, and
+hosted-runner provenance policy, then binds that archive digest again after copying it into
+root-owned staging. The privileged phase extracts there, invokes the bundled installer and check,
+and compares the installed role binaries with the verified bundle before reporting success.
+
+The helper does not select `latest`, perform network access as root, or replace policy, token, BWS,
+or relay environment state. It is an upgrade path only. First installation still uses the manual
+release verification and role setup above, and the first release carrying the helper must be
+installed that way once to bootstrap later one-command upgrades. GitHub CLI must be current and
+able to reach the release and attestation APIs on both devices.
+
 ### Manage project policy
 
 The worker installer also installs `/usr/local/sbin/secrets-broker-admin`. It is a separate,

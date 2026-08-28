@@ -7,6 +7,7 @@ export PATH
 umask 077
 
 readonly RELAY_TARGET=/usr/local/bin/secrets-broker-relay
+readonly UPGRADE_TARGET=/usr/local/bin/secrets-broker-upgrade
 readonly CONFIG_DIR=/etc/secrets-broker-relay
 readonly ENV_TARGET=/etc/secrets-broker-relay/environment
 readonly SERVICE_TARGET=/etc/systemd/system/secrets-broker-relay.service
@@ -23,6 +24,7 @@ fi
 relay_source="$repo_root/bin/secrets-broker-relay"
 service_source="$script_dir/secrets-broker-relay.service"
 environment_source=""
+upgrade_source="$script_dir/upgrade-release.sh"
 CONTROL_ADDR=""
 DECISION_ADDR=""
 
@@ -188,6 +190,7 @@ install_relay() {
   done
 
   require_executable_source "$relay_source" "relay source"
+  require_executable_source "$upgrade_source" "upgrade helper source"
   require_source_file "$service_source" "systemd service source"
 
   if [[ -e "$ENV_TARGET" || -L "$ENV_TARGET" ]]; then
@@ -209,6 +212,7 @@ install_relay() {
   fi
 
   install -D -o root -g root -m 0755 "$relay_source" "$RELAY_TARGET"
+  install -D -o root -g root -m 0755 "$upgrade_source" "$UPGRADE_TARGET"
   install -o root -g root -m 0644 "$service_source" "$SERVICE_TARGET"
   systemd-analyze verify "$SERVICE_TARGET" >/dev/null 2>&1 || fail "systemd rejected $SERVICE_TARGET"
   systemctl daemon-reload
@@ -228,10 +232,12 @@ check_relay() {
     fail "$CONFIG_DIR must be owned by root:root"
   [[ "$(stat -c %a "$CONFIG_DIR")" == 755 ]] || fail "$CONFIG_DIR must have mode 755"
   check_regular_file "$RELAY_TARGET" root root 755
+  check_regular_file "$UPGRADE_TARGET" root root 755
   check_regular_file "$ENV_TARGET" root root 644
   check_regular_file "$SERVICE_TARGET" root root 644
   validate_environment "$ENV_TARGET"
   cmp -s "$SERVICE_TARGET" "$service_source" || fail "$SERVICE_TARGET differs from the bundled service"
+  cmp -s "$UPGRADE_TARGET" "$upgrade_source" || fail "$UPGRADE_TARGET differs from the bundled helper"
   systemd-analyze verify "$SERVICE_TARGET" >/dev/null 2>&1 || fail "systemd rejected $SERVICE_TARGET"
   systemctl is-enabled --quiet "$SERVICE_NAME" || fail "$SERVICE_NAME is not enabled"
   systemctl is-active --quiet "$SERVICE_NAME" || fail "$SERVICE_NAME is not active"
