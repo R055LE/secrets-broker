@@ -24,6 +24,7 @@ const (
 
 type projectEditor interface {
 	ListProjects() ([]admin.ProjectSummary, error)
+	GetProject(alias string) (admin.ProjectDetail, error)
 	ListAllowlist(alias string) ([][]string, error)
 	CreateProject(input admin.ProjectInput) (bool, error)
 	SetApproval(alias, mode string) (bool, error)
@@ -115,6 +116,35 @@ func newRootCommandWithAccess(
 				_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\n", item.Alias, item.Mode, item.Behavior)
 			}
 			return writer.Flush()
+		},
+	})
+	projects.AddCommand(&cobra.Command{
+		Use:   "show ALIAS",
+		Short: "Show one project's full configuration",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			detail, err := editor.GetProject(args[0])
+			if err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(
+				stdout,
+				"ALIAS: %s\nBWS_PROJECT_ID: %s\nTOKEN_ENTRY: %s\nWORKING_DIR: %s\nMODE: %s\nBEHAVIOR: %s\n",
+				detail.Alias,
+				detail.BWSProjectID,
+				detail.TokenEntry,
+				detail.WorkingDir,
+				detail.Mode,
+				detail.Behavior,
+			)
+			for _, argv := range detail.Allow {
+				encoded, err := json.Marshal(argv)
+				if err != nil {
+					return fmt.Errorf("encoding allowlist argv: %w", err)
+				}
+				_, _ = fmt.Fprintf(stdout, "ALLOW: %s\n", encoded)
+			}
+			return nil
 		},
 	})
 	var createBWSProjectID string

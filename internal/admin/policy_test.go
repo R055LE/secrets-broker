@@ -39,6 +39,43 @@ func TestListProjectsUsesOperatorFacingModes(t *testing.T) {
 	}
 }
 
+func TestGetProjectReturnsFullConfiguration(t *testing.T) {
+	path := writePolicy(t, policyWithProjects(
+		projectBlockWithAllow("omada-read", `approval = "never"`,
+			[]string{"/usr/bin/systemctl", "status", "omada*"},
+			[]string{"/usr/bin/journalctl", "-u", "omada"},
+		),
+	))
+
+	detail, err := NewEditor(path, uint32(os.Geteuid())).GetProject("omada-read")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	want := ProjectDetail{
+		Alias:        "omada-read",
+		BWSProjectID: "00000000-0000-0000-0000-000000000000",
+		TokenEntry:   "omada-read",
+		WorkingDir:   "/tmp",
+		Mode:         "automatic",
+		Behavior:     "allowlisted commands run without confirmation",
+		Allow: [][]string{
+			{"/usr/bin/systemctl", "status", "omada*"},
+			{"/usr/bin/journalctl", "-u", "omada"},
+		},
+	}
+	if !reflect.DeepEqual(detail, want) {
+		t.Fatalf("detail = %#v, want %#v", detail, want)
+	}
+}
+
+func TestGetProjectRejectsUnknownAlias(t *testing.T) {
+	path := writePolicy(t, policyWithProjects(projectBlock("alpha", `approval = "never"`)))
+
+	if _, err := NewEditor(path, uint32(os.Geteuid())).GetProject("nope"); err == nil || !strings.Contains(err.Error(), `unknown project "nope"`) {
+		t.Fatalf("err = %v, want unknown project error", err)
+	}
+}
+
 func TestCreateProjectAddsOnlySafeProjectAndPreservesMetadata(t *testing.T) {
 	path := writePolicy(t, policyWithProjects(projectBlock("alpha", `approval = "never"`)))
 	beforeMetadata := statFile(t, path)

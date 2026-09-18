@@ -31,6 +31,7 @@ const (
 
 type ProjectEditor interface {
 	ListProjects() ([]ProjectSummary, error)
+	GetProject(alias string) (ProjectDetail, error)
 	ListAllowlist(alias string) ([][]string, error)
 	CreateProject(input ProjectInput) (bool, error)
 	SetApproval(alias, mode string) (bool, error)
@@ -86,6 +87,10 @@ func newAuditedEditor(
 
 func (e *AuditedEditor) ListProjects() ([]ProjectSummary, error) {
 	return e.editor.ListProjects()
+}
+
+func (e *AuditedEditor) GetProject(alias string) (ProjectDetail, error) {
+	return e.editor.GetProject(alias)
 }
 
 func (e *AuditedEditor) ListAllowlist(alias string) ([][]string, error) {

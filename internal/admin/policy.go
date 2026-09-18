@@ -38,6 +38,16 @@ type ProjectSummary struct {
 	Behavior string
 }
 
+type ProjectDetail struct {
+	Alias        string
+	BWSProjectID string
+	TokenEntry   string
+	WorkingDir   string
+	Mode         string
+	Behavior     string
+	Allow        [][]string
+}
+
 type ProjectInput struct {
 	Alias        string
 	BWSProjectID string
@@ -80,6 +90,29 @@ func (e *Editor) ListProjects() ([]ProjectSummary, error) {
 		projects[i] = ProjectSummary{Alias: project.Alias, Mode: mode, Behavior: behavior}
 	}
 	return projects, nil
+}
+
+func (e *Editor) GetProject(alias string) (ProjectDetail, error) {
+	_, cfg, _, err := e.readPolicy()
+	if err != nil {
+		return ProjectDetail{}, err
+	}
+
+	projectIndex, err := findProject(cfg, alias)
+	if err != nil {
+		return ProjectDetail{}, err
+	}
+	project := cfg.Projects[projectIndex]
+	mode, behavior := displayApproval(project.Approval)
+	return ProjectDetail{
+		Alias:        project.Alias,
+		BWSProjectID: project.BWSProjectID,
+		TokenEntry:   project.TokenEntry,
+		WorkingDir:   project.WorkingDir,
+		Mode:         mode,
+		Behavior:     behavior,
+		Allow:        cloneArgv(project.Allow),
+	}, nil
 }
 
 func (e *Editor) ListAllowlist(alias string) ([][]string, error) {

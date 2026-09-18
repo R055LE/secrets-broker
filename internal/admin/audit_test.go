@@ -23,6 +23,8 @@ type fakeMutationEditor struct {
 	changed        bool
 	err            error
 	calls          int
+	alias          string
+	detail         ProjectDetail
 	recoveryID     string
 	confirmation   string
 	recoveryResult RecoveryResult
@@ -30,6 +32,11 @@ type fakeMutationEditor struct {
 
 func (f *fakeMutationEditor) ListProjects() ([]ProjectSummary, error) {
 	return nil, nil
+}
+
+func (f *fakeMutationEditor) GetProject(alias string) (ProjectDetail, error) {
+	f.alias = alias
+	return f.detail, f.err
 }
 
 func (f *fakeMutationEditor) ListAllowlist(string) ([][]string, error) {
@@ -346,10 +353,19 @@ func TestAuditedEditorReportsFinishFailureAfterPolicyChange(t *testing.T) {
 
 func TestAuditedEditorDoesNotAuditReadOnlyOperations(t *testing.T) {
 	logger := &fakeMutationLogger{}
-	audited := NewAuditedEditor(&fakeMutationEditor{}, logger, 0)
+	detail := ProjectDetail{Alias: "project", Mode: ModeAutomatic}
+	editor := &fakeMutationEditor{detail: detail}
+	audited := NewAuditedEditor(editor, logger, 0)
 
 	if _, err := audited.ListProjects(); err != nil {
 		t.Fatalf("ListProjects: %v", err)
+	}
+	got, err := audited.GetProject("project")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if !reflect.DeepEqual(got, detail) || editor.alias != "project" {
+		t.Fatalf("GetProject returned %#v for alias %q", got, editor.alias)
 	}
 	if _, err := audited.ListAllowlist("project"); err != nil {
 		t.Fatalf("ListAllowlist: %v", err)
