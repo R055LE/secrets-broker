@@ -76,6 +76,10 @@ type RunRequest struct {
 type RunOutcome struct {
 	Denied          bool
 	Reason          string // set when Denied — one of the Reason* constants
+	// ApprovalCause is a sanitized diagnostic (from approval.Cause) set
+	// when Reason is ReasonApprovalRejected and the approver can explain
+	// itself. It never changes the fail-closed decision, only the report.
+	ApprovalCause   string
 	ExitCode        int
 	AuditIncomplete bool
 }
@@ -113,7 +117,11 @@ func (b *Broker) Run(ctx context.Context, req RunRequest) RunOutcome {
 		prompt := formatPrompt(req.Project, req.WorkingDir, req.Argv)
 		decision, approveErr := b.approver.Approve(ctx, prompt)
 		if approveErr != nil || decision != approval.Approved {
-			return deny(ReasonApprovalRejected)
+			outcome := deny(ReasonApprovalRejected)
+			if causeProvider, ok := b.approver.(approval.CauseProvider); ok && causeProvider.ApproveCause() != "" {
+				outcome.ApprovalCause = string(causeProvider.ApproveCause())
+			}
+			return outcome
 		}
 		// approved — fall through to execution below
 

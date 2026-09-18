@@ -17,13 +17,23 @@ import (
 // implementation of this interface, not a change to callers.
 type KDialogApprover struct {
 	runner execx.Runner
+	cause  Cause
 }
 
 func NewKDialogApprover(runner execx.Runner) *KDialogApprover {
 	return &KDialogApprover{runner: runner}
 }
 
+// ApproveCause reports the sanitized cause of the most recent denial.
+func (a *KDialogApprover) ApproveCause() Cause {
+	if a.cause == "" {
+		return CauseUnavailable
+	}
+	return a.cause
+}
+
 func (a *KDialogApprover) Approve(ctx context.Context, prompt string) (Decision, error) {
+	a.cause = CauseUnavailable
 	result, err := a.runner.Run(ctx, "kdialog", []string{"--yesno", prompt}, nil)
 	if err != nil {
 		return Denied, fmt.Errorf("running kdialog: %w", err)
@@ -36,6 +46,9 @@ func (a *KDialogApprover) Approve(ctx context.Context, prompt string) (Decision,
 	// way.
 	if result.ExitCode == 0 {
 		return Approved, nil
+	}
+	if result.ExitCode == 1 {
+		a.cause = CauseRejected
 	}
 	return Denied, nil
 }

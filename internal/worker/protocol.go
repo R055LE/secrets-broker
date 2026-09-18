@@ -27,6 +27,9 @@ type Request struct {
 type Result struct {
 	Denied   bool   `json:"denied"`
 	Reason   string `json:"reason,omitempty"`
+	// Cause is a sanitized approval-cause diagnostic (see approval.Cause),
+	// set only for approval denials. It carries no request identifiers.
+	Cause    string `json:"cause,omitempty"`
 	ExitCode int    `json:"exit_code"`
 }
 
