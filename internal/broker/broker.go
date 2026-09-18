@@ -187,7 +187,10 @@ func (b *Broker) DryRun(project, workingDir string, argv []string) DryRunResult 
 		return DryRunResult{Verdict: VerdictDeny, Reason: "unknown project"}
 	}
 	if p.WorkingDir != "" && !sameWorkingDir(p.WorkingDir, workingDir) {
-		return DryRunResult{Verdict: VerdictDeny, Reason: "working directory not allowed"}
+		return DryRunResult{
+			Verdict: VerdictDeny,
+			Reason:  fmt.Sprintf("working directory not allowed (project %q runs from %s)", project, strconv.QuoteToASCII(p.WorkingDir)),
+		}
 	}
 
 	switch b.decide(p, argv) {
