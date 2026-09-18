@@ -104,7 +104,7 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	if outcome.AuditIncomplete {
 		_, _ = (&frameWriter{mu: mu, encoder: encoder, stream: frameStderr}).Write([]byte("secrets-broker: warning: audit finish record could not be written\n"))
 	}
-	result := Result{Denied: outcome.Denied, Reason: outcome.Reason, ExitCode: outcome.ExitCode}
+	result := Result{Denied: outcome.Denied, Reason: outcome.Reason, Cause: outcome.ApprovalCause, ExitCode: outcome.ExitCode}
 	if outcome.Denied {
 		result.ExitCode = 125
 		if outcome.Reason == broker.ReasonRunnerStartFailed {

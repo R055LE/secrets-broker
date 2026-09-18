@@ -384,3 +384,75 @@ func TestDryRun_ApprovalDecisionMatrix(t *testing.T) {
 		})
 	}
 }
+
+func TestRun_ApprovalRejectionExposesSanitizedCause(t *testing.T) {
+	h := newHarness(testConfig())
+	h.approver.Decision = approval.Denied
+	h.approver.Cause = approval.CauseRejected
+
+	out := h.broker.Run(context.Background(), broker.RunRequest{Project: "prompt-project", Argv: []string{"curl", "https://example.com"}})
+
+	if !out.Denied || out.Reason != broker.ReasonApprovalRejected {
+		t.Fatalf("got %+v", out)
+	}
+	if out.ApprovalCause != string(approval.CauseRejected) {
+		t.Fatalf("got cause %q, want %q", out.ApprovalCause, approval.CauseRejected)
+	}
+	if len(h.resolver.Calls()) != 0 || len(h.runner.Specs) != 0 {
+		t.Fatal("a cause label must not permit token resolution or execution")
+	}
+}
+
+func TestRun_ApprovalErrorOverridesApprovedDecision(t *testing.T) {
+	h := newHarness(testConfig())
+	h.approver.Decision = approval.Approved
+	h.approver.Err = errors.New("approval mechanism failed")
+	h.approver.Cause = approval.CauseUnavailable
+
+	out := h.broker.Run(context.Background(), broker.RunRequest{Project: "prompt-project", Argv: []string{"curl", "https://example.com"}})
+
+	if !out.Denied || out.Reason != broker.ReasonApprovalRejected {
+		t.Fatalf("got %+v", out)
+	}
+	if out.ApprovalCause != string(approval.CauseUnavailable) {
+		t.Fatalf("got cause %q, want %q", out.ApprovalCause, approval.CauseUnavailable)
+	}
+	if len(h.resolver.Calls()) != 0 || len(h.runner.Specs) != 0 {
+		t.Fatal("token resolver and runner must not be touched after an approval error")
+	}
+}
+
+func TestRun_ApprovalRejectionWithoutCauseOmitsCause(t *testing.T) {
+	h := newHarness(testConfig())
+	h.approver.Decision = approval.Denied
+
+	out := h.broker.Run(context.Background(), broker.RunRequest{Project: "prompt-project", Argv: []string{"curl", "https://example.com"}})
+
+	if !out.Denied || out.Reason != broker.ReasonApprovalRejected {
+		t.Fatalf("got %+v", out)
+	}
+	if out.ApprovalCause != "" {
+		t.Fatalf("got cause %q, want empty", out.ApprovalCause)
+	}
+}
+
+type silentApprover struct{}
+
+func (silentApprover) Approve(ctx context.Context, prompt string) (approval.Decision, error) {
+	return approval.Denied, nil
+}
+
+func TestRun_ApprovalRejectionFromApproverWithoutCause(t *testing.T) {
+	cfg := testConfig()
+	h := newHarness(cfg)
+	h.broker = broker.New(cfg, h.resolver, silentApprover{}, h.runner, h.logger)
+
+	out := h.broker.Run(context.Background(), broker.RunRequest{Project: "prompt-project", Argv: []string{"curl", "https://example.com"}})
+
+	if !out.Denied || out.Reason != broker.ReasonApprovalRejected {
+		t.Fatalf("got %+v", out)
+	}
+	if out.ApprovalCause != "" {
+		t.Fatalf("got cause %q, want empty for a non-CauseProvider approver", out.ApprovalCause)
+	}
+}

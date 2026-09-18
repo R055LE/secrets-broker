@@ -7,6 +7,10 @@ type FakeApprover struct {
 	Decision Decision
 	Err      error
 
+	// Cause is returned by ApproveCause when the fake is used as a
+	// CauseProvider; empty means the fake does not implement it.
+	Cause Cause
+
 	// Prompts records every prompt text passed to Approve, for assertions.
 	Prompts []string
 }
@@ -14,6 +18,10 @@ type FakeApprover struct {
 func (f *FakeApprover) Approve(ctx context.Context, prompt string) (Decision, error) {
 	f.Prompts = append(f.Prompts, prompt)
 	return f.Decision, f.Err
+}
+
+func (f *FakeApprover) ApproveCause() Cause {
+	return f.Cause
 }
 
 // FakeRelayClient is a scripted RelayClient for TailscaleApprover unit

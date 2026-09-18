@@ -60,7 +60,11 @@ func newRunCmd(exitCode *int) *cobra.Command {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", label, result.Reason)
 			}
 			if result.Denied {
-				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "secrets-broker: denied (%s)\n", result.Reason)
+				if result.Cause != "" {
+					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "secrets-broker: denied (%s: %s)\n", result.Reason, result.Cause)
+				} else {
+					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "secrets-broker: denied (%s)\n", result.Reason)
+				}
 			}
 			*exitCode = result.ExitCode
 			return nil

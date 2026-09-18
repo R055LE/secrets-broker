@@ -2,6 +2,7 @@ package approval_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -100,5 +101,129 @@ func TestTailscaleApprover_TransientPollErrorsAreRetried(t *testing.T) {
 	}
 	if decision != approval.Denied {
 		t.Fatalf("got %v, want Denied after exhausting the timeout on poll errors", decision)
+	}
+}
+
+func TestTailscaleApprover_ExplicitDenialCause(t *testing.T) {
+	client := &approval.FakeRelayClient{
+		PollSequence: []approval.RelayStatus{approval.RelayStatusDenied},
+	}
+	a := approval.NewTailscaleApprover(client, 5*time.Millisecond, 2*time.Second)
+
+	decision, err := a.Approve(context.Background(), "prompt")
+	if err != nil || decision != approval.Denied {
+		t.Fatalf("got %v/%v, want Denied without error", decision, err)
+	}
+	if got := a.ApproveCause(); got != approval.CauseRejected {
+		t.Fatalf("got cause %q, want %q", got, approval.CauseRejected)
+	}
+}
+
+func TestTailscaleApprover_RelayExpiredCause(t *testing.T) {
+	client := &approval.FakeRelayClient{
+		PollSequence: []approval.RelayStatus{approval.RelayStatusExpired},
+	}
+	a := approval.NewTailscaleApprover(client, 5*time.Millisecond, 2*time.Second)
+
+	decision, err := a.Approve(context.Background(), "prompt")
+	if err != nil || decision != approval.Denied {
+		t.Fatalf("got %v/%v, want Denied without error", decision, err)
+	}
+	if got := a.ApproveCause(); got != approval.CauseExpired {
+		t.Fatalf("got cause %q, want %q", got, approval.CauseExpired)
+	}
+}
+
+func TestTailscaleApprover_TimeoutUnansweredCause(t *testing.T) {
+	client := &approval.FakeRelayClient{} // always Pending — never answered
+	a := approval.NewTailscaleApprover(client, 5*time.Millisecond, 30*time.Millisecond)
+
+	decision, err := a.Approve(context.Background(), "prompt")
+	if err != nil || decision != approval.Denied {
+		t.Fatalf("got %v/%v, want Denied without error", decision, err)
+	}
+	if got := a.ApproveCause(); got != approval.CauseExpired {
+		t.Fatalf("got cause %q, want %q", got, approval.CauseExpired)
+	}
+}
+
+func TestTailscaleApprover_SustainedPollFailureCause(t *testing.T) {
+	client := &approval.FakeRelayClient{PollErr: context.DeadlineExceeded}
+	a := approval.NewTailscaleApprover(client, 5*time.Millisecond, 30*time.Millisecond)
+
+	decision, err := a.Approve(context.Background(), "prompt")
+	if err != nil || decision != approval.Denied {
+		t.Fatalf("got %v/%v, want Denied without error", decision, err)
+	}
+	if got := a.ApproveCause(); got != approval.CauseUnreachable {
+		t.Fatalf("got cause %q, want %q", got, approval.CauseUnreachable)
+	}
+}
+
+func TestTailscaleApprover_RegisterErrorCause(t *testing.T) {
+	client := &approval.FakeRelayClient{RegisterErr: context.DeadlineExceeded}
+	a := approval.NewTailscaleApprover(client, 5*time.Millisecond, time.Second)
+
+	decision, err := a.Approve(context.Background(), "prompt")
+	if err == nil || decision != approval.Denied {
+		t.Fatalf("got %v/%v, want Denied with error", decision, err)
+	}
+	if got := a.ApproveCause(); got != approval.CauseUnreachable {
+		t.Fatalf("got cause %q, want %q", got, approval.CauseUnreachable)
+	}
+}
+
+type recoveringRelay struct {
+	pollCalls int
+}
+
+func (r *recoveringRelay) Register(context.Context, string, string) error {
+	return nil
+}
+
+func (r *recoveringRelay) Poll(context.Context, string) (approval.RelayStatus, error) {
+	r.pollCalls++
+	if r.pollCalls == 1 {
+		return "", errors.New("temporary poll failure")
+	}
+	return approval.RelayStatusPending, nil
+}
+
+func TestTailscaleApprover_RecoveredPollingTimeoutCause(t *testing.T) {
+	client := &recoveringRelay{}
+	a := approval.NewTailscaleApprover(client, time.Millisecond, 30*time.Millisecond)
+
+	decision, err := a.Approve(context.Background(), "prompt")
+	if err != nil || decision != approval.Denied {
+		t.Fatalf("got %v/%v, want Denied without error", decision, err)
+	}
+	if client.pollCalls < 2 {
+		t.Fatalf("got %d poll calls, want at least two", client.pollCalls)
+	}
+	if got := a.ApproveCause(); got != approval.CauseExpired {
+		t.Fatalf("got cause %q, want %q", got, approval.CauseExpired)
+	}
+}
+
+type deadlineRelay struct{}
+
+func (deadlineRelay) Register(context.Context, string, string) error {
+	return nil
+}
+
+func (deadlineRelay) Poll(ctx context.Context, _ string) (approval.RelayStatus, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func TestTailscaleApprover_PollCanceledByApprovalTimeoutCause(t *testing.T) {
+	a := approval.NewTailscaleApprover(deadlineRelay{}, time.Millisecond, 30*time.Millisecond)
+
+	decision, err := a.Approve(context.Background(), "prompt")
+	if err != nil || decision != approval.Denied {
+		t.Fatalf("got %v/%v, want Denied without error", decision, err)
+	}
+	if got := a.ApproveCause(); got != approval.CauseExpired {
+		t.Fatalf("got cause %q, want %q", got, approval.CauseExpired)
 	}
 }
