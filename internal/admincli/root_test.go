@@ -540,6 +540,27 @@ func TestProjectsCreateDoesNotExposeUnsafeDefaults(t *testing.T) {
 	}
 }
 
+func TestTokenEntryUsageSurfacesResolverBackendCaveat(t *testing.T) {
+	root := newRootCommand(func() int { return 0 }, &fakeProjectEditor{}, &bytes.Buffer{})
+	projects, _, err := root.Find([]string{"projects"})
+	if err != nil {
+		t.Fatalf("finding projects command: %v", err)
+	}
+	create, _, err := projects.Find([]string{"create"})
+	if err != nil {
+		t.Fatalf("finding create command: %v", err)
+	}
+	flag := create.Flags().Lookup("token-entry")
+	if flag == nil {
+		t.Fatal("projects create must expose --token-entry")
+	}
+	for _, phrase := range []string{"resolver backend", "advisory only"} {
+		if !strings.Contains(flag.Usage, phrase) {
+			t.Fatalf("--token-entry usage must mention %q, got: %q", phrase, flag.Usage)
+		}
+	}
+}
+
 func TestProjectRecoveryDoesNotExposeUnsafeOverrides(t *testing.T) {
 	root := newRootCommand(func() int { return 0 }, &fakeProjectEditor{}, &bytes.Buffer{})
 	for _, path := range [][]string{{"projects", "remove"}, {"projects", "recovery", "restore"}} {

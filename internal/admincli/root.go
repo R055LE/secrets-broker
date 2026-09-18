@@ -151,7 +151,7 @@ func newRootCommandWithAccess(
 		},
 	}
 	create.Flags().StringVar(&createBWSProjectID, "bws-project-id", "", "Bitwarden Secrets Manager project ID")
-	create.Flags().StringVar(&createTokenEntry, "token-entry", "", "Bitwarden Secrets Manager access-token secret name")
+	create.Flags().StringVar(&createTokenEntry, "token-entry", "", "Bitwarden Secrets Manager access-token secret name; meaning depends on the resolver backend, advisory only under env/file (ignored at runtime)")
 	create.Flags().StringVar(&createWorkingDir, "working-dir", "", "absolute allowed working directory")
 	projects.AddCommand(create)
 	var removeConfirmation string
