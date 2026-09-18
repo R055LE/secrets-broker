@@ -20,6 +20,7 @@ type fakeProjectEditor struct {
 	err            error
 	alias          string
 	mode           string
+	detail         admin.ProjectDetail
 	allow          [][]string
 	argv           []string
 	input          admin.ProjectInput
@@ -75,6 +76,12 @@ func (f *fakeProjectEditor) CreateProject(input admin.ProjectInput) (bool, error
 	return f.changed, f.err
 }
 
+func (f *fakeProjectEditor) GetProject(alias string) (admin.ProjectDetail, error) {
+	f.calls++
+	f.alias = alias
+	return f.detail, f.err
+}
+
 func (f *fakeProjectEditor) ListAllowlist(alias string) ([][]string, error) {
 	f.calls++
 	f.alias = alias
@@ -128,6 +135,51 @@ func TestProjectsList(t *testing.T) {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, stdout.String())
 		}
+	}
+}
+
+func TestProjectsShowPrintsFullConfiguration(t *testing.T) {
+	editor := &fakeProjectEditor{detail: admin.ProjectDetail{
+		Alias:        "omada-read",
+		BWSProjectID: "11111111-1111-1111-1111-111111111111",
+		TokenEntry:   "omada-agent",
+		WorkingDir:   "/srv/omada",
+		Mode:         "confirm",
+		Behavior:     "allowlisted commands require confirmation",
+		Allow:        [][]string{{"/usr/bin/systemctl", "status", "omada*"}},
+	}}
+	var stdout, stderr bytes.Buffer
+
+	if code := execute(func() int { return 0 }, editor, []string{"projects", "show", "omada-read"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if editor.alias != "omada-read" || editor.calls != 1 {
+		t.Fatalf("alias = %q, calls = %d", editor.alias, editor.calls)
+	}
+	for _, want := range []string{
+		"ALIAS: omada-read",
+		"BWS_PROJECT_ID: 11111111-1111-1111-1111-111111111111",
+		"TOKEN_ENTRY: omada-agent",
+		"WORKING_DIR: /srv/omada",
+		"MODE: confirm",
+		"BEHAVIOR: allowlisted commands require confirmation",
+		`ALLOW: ["/usr/bin/systemctl","status","omada*"]`,
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestProjectsShowPropagatesUnknownProjectError(t *testing.T) {
+	editor := &fakeProjectEditor{err: errors.New("unknown project \"nope\"")}
+	var stdout, stderr bytes.Buffer
+
+	if code := execute(func() int { return 0 }, editor, []string{"projects", "show", "nope"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), `unknown project "nope"`) {
+		t.Errorf("stderr missing error: %q", stderr.String())
 	}
 }
 
@@ -488,17 +540,24 @@ func TestProjectsAllowlistRemoveReportsNoOp(t *testing.T) {
 }
 
 func TestAdminCommandsRequireRoot(t *testing.T) {
-	editor := &fakeProjectEditor{}
-	var stdout, stderr bytes.Buffer
+	for _, args := range [][]string{
+		{"projects", "list"},
+		{"projects", "show", "project"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			editor := &fakeProjectEditor{}
+			var stdout, stderr bytes.Buffer
 
-	if code := execute(func() int { return 1000 }, editor, []string{"projects", "list"}, &stdout, &stderr); code == 0 {
-		t.Fatal("expected non-root invocation to fail")
-	}
-	if editor.calls != 0 {
-		t.Fatal("editor was called before root check")
-	}
-	if !strings.Contains(stderr.String(), "must run as root") {
-		t.Fatalf("unexpected stderr: %q", stderr.String())
+			if code := execute(func() int { return 1000 }, editor, args, &stdout, &stderr); code == 0 {
+				t.Fatal("expected non-root invocation to fail")
+			}
+			if editor.calls != 0 {
+				t.Fatal("editor was called before root check")
+			}
+			if !strings.Contains(stderr.String(), "must run as root") {
+				t.Fatalf("unexpected stderr: %q", stderr.String())
+			}
+		})
 	}
 }
 
