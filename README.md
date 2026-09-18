@@ -200,7 +200,10 @@ sudo secrets-broker-admin projects recovery restore RECOVERY_ID --confirm github
 Project creation requires every deployment identifier and an absolute working directory. It always
 starts in `confirm` mode with an empty allowlist. Duplicate aliases and incomplete input are
 rejected. The command only changes the local worker policy; it does not create secrets, change the
-worker's BWS access token, or broaden that token's project grants.
+worker's BWS access token, or broaden that token's project grants. The `--token-entry` value's
+meaning depends on the configured resolver backend: under `env` and `file` resolvers it is advisory
+only (a memorable label, commonly the project alias) and is ignored at runtime; only Secret Service
+deployments use it as a lookup key (ADR-0007).
 
 `confirm` means an exact allowlist match still requires a live approval. `automatic` means an exact
 allowlist match runs without a prompt; unlisted commands remain denied. The broader legacy modes
