@@ -205,6 +205,12 @@ meaning depends on the configured resolver backend: under `env` and `file` resol
 only (a memorable label, commonly the project alias) and is ignored at runtime; only Secret Service
 deployments use it as a lookup key (ADR-0007).
 
+The working directory only fixes where the approved command starts. The command still runs as
+`secrets-broker-runner` (ADR-0010), and that account's own file permissions apply. A normal checkout
+owned by your user is readable but not writable by the runner, so a command that writes a log or
+output file relative to its cwd fails with `Permission denied`. Point output at a path the runner
+can write, such as `/tmp` or a dedicated runner-owned directory, not the project checkout.
+
 `confirm` means an exact allowlist match still requires a live approval. `automatic` means an exact
 allowlist match runs without a prompt; unlisted commands remain denied. The broader legacy modes
 are shown as `prompt-unlisted` and `prompt-any` by `projects list`, but this command deliberately
