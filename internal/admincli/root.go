@@ -182,7 +182,7 @@ func newRootCommandWithAccess(
 	}
 	create.Flags().StringVar(&createBWSProjectID, "bws-project-id", "", "Bitwarden Secrets Manager project ID")
 	create.Flags().StringVar(&createTokenEntry, "token-entry", "", "Bitwarden Secrets Manager access-token secret name; meaning depends on the resolver backend, advisory only under env/file (ignored at runtime)")
-	create.Flags().StringVar(&createWorkingDir, "working-dir", "", "absolute allowed working directory")
+	create.Flags().StringVar(&createWorkingDir, "working-dir", "", "absolute allowed working directory; the command starts here as secrets-broker-runner, which does not grant write access, so output files need a path that user can write")
 	projects.AddCommand(create)
 	var removeConfirmation string
 	remove := &cobra.Command{
