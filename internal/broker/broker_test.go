@@ -357,6 +357,23 @@ func TestDryRun_UnknownProject(t *testing.T) {
 	}
 }
 
+func TestDryRun_WrongWorkingDirectoryNamesAllowedDirectory(t *testing.T) {
+	cfg := &config.Config{Projects: []config.Project{{
+		Alias: "cwd-project", WorkingDir: "/tmp/approved\nproject",
+	}}}
+	h := newHarness(cfg)
+
+	result := h.broker.DryRun("cwd-project", "/tmp/wrong-project", []string{"git", "push"})
+
+	if result.Verdict != broker.VerdictDeny {
+		t.Fatalf("got verdict %v, want VerdictDeny", result.Verdict)
+	}
+	want := `working directory not allowed (project "cwd-project" runs from "/tmp/approved\nproject")`
+	if result.Reason != want {
+		t.Fatalf("got reason %q, want %q", result.Reason, want)
+	}
+}
+
 func TestDryRun_ApprovalDecisionMatrix(t *testing.T) {
 	tests := []struct {
 		name    string
