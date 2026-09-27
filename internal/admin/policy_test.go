@@ -225,6 +225,125 @@ func TestCreateProjectRejectsPolicyLargerThanReadLimitWithoutWriting(t *testing.
 	}
 }
 
+func TestUpdateProjectMetadataChangesOnlyRequestedValues(t *testing.T) {
+	newID := "11111111-1111-1111-1111-111111111111"
+	newToken := "alpha-new"
+	newDir := "/srv/alpha project"
+	tests := []struct {
+		name   string
+		update ProjectMetadataUpdate
+		fields []string
+		values []string
+	}{
+		{"BWS project ID", ProjectMetadataUpdate{BWSProjectID: &newID}, []string{"bws_project_id"}, []string{newID}},
+		{"token entry", ProjectMetadataUpdate{TokenEntry: &newToken}, []string{"token_entry"}, []string{newToken}},
+		{"working directory", ProjectMetadataUpdate{WorkingDir: &newDir}, []string{"working_dir"}, []string{newDir}},
+		{"combined", ProjectMetadataUpdate{BWSProjectID: &newID, TokenEntry: &newToken, WorkingDir: &newDir}, []string{"bws_project_id", "token_entry", "working_dir"}, []string{newID, newToken, newDir}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contents := policyWithProjects(
+				projectBlock("alpha", `approval = "never"`),
+				projectBlock("beta", `approval = "allowlisted-prompt"`),
+			) + "# keep trailing comment\n"
+			contents = strings.Replace(contents, `token_entry = "alpha"`, `token_entry = 'alpha' # keep field comment`, 1)
+			path := writePolicy(t, contents)
+			before := statFile(t, path)
+
+			changed, err := NewEditor(path, uint32(os.Geteuid())).UpdateProjectMetadata("alpha", tt.update)
+			if err != nil || !changed {
+				t.Fatalf("UpdateProjectMetadata changed = %v, err = %v", changed, err)
+			}
+			want := contents
+			for i, field := range tt.fields {
+				old := map[string]string{
+					"bws_project_id": `bws_project_id = "00000000-0000-0000-0000-000000000000"`,
+					"token_entry":    `token_entry = 'alpha' # keep field comment`,
+					"working_dir":    `working_dir = "/tmp"`,
+				}[field]
+				encoded, _ := json.Marshal(tt.values[i])
+				line := field + " = " + string(encoded)
+				if field == "token_entry" {
+					line += " # keep field comment"
+				}
+				want = strings.Replace(want, old, line, 1)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != want {
+				t.Fatalf("updated policy changed unexpected bytes:\n%s", got)
+			}
+			assertMetadataPreserved(t, before, statFile(t, path))
+		})
+	}
+}
+
+func TestUpdateProjectMetadataRejectsNoOpInvalidAndUnsupportedLayout(t *testing.T) {
+	contents := policyWithProjects(projectBlock("alpha", `approval = "never"`))
+	path := writePolicy(t, contents)
+	before := statFile(t, path)
+	editor := NewEditor(path, uint32(os.Geteuid()))
+	oldID := "00000000-0000-0000-0000-000000000000"
+	changed, err := editor.UpdateProjectMetadata("alpha", ProjectMetadataUpdate{BWSProjectID: &oldID})
+	if err != nil || changed {
+		t.Fatalf("no-op changed = %v, err = %v", changed, err)
+	}
+	if after := statFile(t, path); after.Ino != before.Ino {
+		t.Fatal("no-op replaced policy")
+	}
+	empty := ""
+	relative := "relative/path"
+	for _, tt := range []struct {
+		alias string
+		input ProjectMetadataUpdate
+	}{
+		{"alpha", ProjectMetadataUpdate{}},
+		{"alpha", ProjectMetadataUpdate{TokenEntry: &empty}},
+		{"alpha", ProjectMetadataUpdate{WorkingDir: &relative}},
+		{"missing", ProjectMetadataUpdate{BWSProjectID: &oldID}},
+	} {
+		if _, err := editor.UpdateProjectMetadata(tt.alias, tt.input); err == nil {
+			t.Fatalf("accepted invalid update: alias %q, input %#v", tt.alias, tt.input)
+		}
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != contents {
+		t.Fatalf("rejected update changed policy: %v", err)
+	}
+
+	unsupported := strings.Replace(contents, `bws_project_id = "00000000-0000-0000-0000-000000000000"`, `bws_project_id = """00000000-0000-0000-0000-000000000000"""`, 1)
+	path = writePolicy(t, unsupported)
+	newID := "11111111-1111-1111-1111-111111111111"
+	if _, err := NewEditor(path, uint32(os.Geteuid())).UpdateProjectMetadata("alpha", ProjectMetadataUpdate{BWSProjectID: &newID}); err == nil || !strings.Contains(err.Error(), "layout is not editable") {
+		t.Fatalf("unsupported layout error = %v", err)
+	}
+	got, err = os.ReadFile(path)
+	if err != nil || string(got) != unsupported {
+		t.Fatalf("unsupported layout changed policy: %v", err)
+	}
+}
+
+func TestUpdateProjectMetadataRejectsConcurrentPolicyChange(t *testing.T) {
+	contents := policyWithProjects(projectBlock("alpha", `approval = "never"`))
+	path := writePolicy(t, contents)
+	editor := NewEditor(path, uint32(os.Geteuid()))
+	editor.beforeWrite = func() {
+		if err := os.WriteFile(path, []byte(contents+"# concurrent edit\n"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newDir := "/srv/alpha"
+	if _, err := editor.UpdateProjectMetadata("alpha", ProjectMetadataUpdate{WorkingDir: &newDir}); err == nil || !strings.Contains(err.Error(), "policy changed") {
+		t.Fatalf("concurrent change error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != contents+"# concurrent edit\n" {
+		t.Fatalf("concurrent edit was overwritten: %v", err)
+	}
+}
+
 func TestSetApprovalChangesOnlySelectedValueAndPreservesMetadata(t *testing.T) {
 	contents := policyWithProjects(
 		projectBlock("alpha", `approval = "allowlisted-prompt"`),

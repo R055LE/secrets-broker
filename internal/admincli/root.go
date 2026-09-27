@@ -27,6 +27,7 @@ type projectEditor interface {
 	GetProject(alias string) (admin.ProjectDetail, error)
 	ListAllowlist(alias string) ([][]string, error)
 	CreateProject(input admin.ProjectInput) (bool, error)
+	UpdateProjectMetadata(alias string, input admin.ProjectMetadataUpdate) (bool, error)
 	SetApproval(alias, mode string) (bool, error)
 	AddAllowlist(alias string, argv []string) (bool, error)
 	RemoveAllowlist(alias string, argv []string) (bool, error)
@@ -184,6 +185,44 @@ func newRootCommandWithAccess(
 	create.Flags().StringVar(&createTokenEntry, "token-entry", "", "Bitwarden Secrets Manager access-token secret name; meaning depends on the resolver backend, advisory only under env/file (ignored at runtime)")
 	create.Flags().StringVar(&createWorkingDir, "working-dir", "", "absolute allowed working directory; the command starts here as secrets-broker-runner, which does not grant write access, so output files need a path that user can write")
 	projects.AddCommand(create)
+	var updateBWSProjectID string
+	var updateTokenEntry string
+	var updateWorkingDir string
+	update := &cobra.Command{
+		Use:   "update ALIAS",
+		Short: "Update a project's local broker metadata",
+		Long:  "Update only the selected fields in local broker policy. This does not change a Bitwarden project, grant, token, or secret. After changing a BWS project ID, run 'secrets-broker-admin projects access check ALIAS' to recheck access.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			input := admin.ProjectMetadataUpdate{}
+			if cmd.Flags().Changed("bws-project-id") {
+				input.BWSProjectID = &updateBWSProjectID
+			}
+			if cmd.Flags().Changed("token-entry") {
+				input.TokenEntry = &updateTokenEntry
+			}
+			if cmd.Flags().Changed("working-dir") {
+				input.WorkingDir = &updateWorkingDir
+			}
+			if input.BWSProjectID == nil && input.TokenEntry == nil && input.WorkingDir == nil {
+				return fmt.Errorf("at least one metadata field is required")
+			}
+			changed, err := editor.UpdateProjectMetadata(args[0], input)
+			if err != nil {
+				return err
+			}
+			if changed {
+				_, _ = fmt.Fprintf(stdout, "Project %q metadata updated.\n", args[0])
+			} else {
+				_, _ = fmt.Fprintf(stdout, "Project %q already has the requested metadata.\n", args[0])
+			}
+			return nil
+		},
+	}
+	update.Flags().StringVar(&updateBWSProjectID, "bws-project-id", "", "Bitwarden Secrets Manager project ID; update local broker policy only")
+	update.Flags().StringVar(&updateTokenEntry, "token-entry", "", "Bitwarden Secrets Manager access-token secret name; meaning depends on the resolver backend, advisory only under env/file (ignored at runtime)")
+	update.Flags().StringVar(&updateWorkingDir, "working-dir", "", "absolute allowed working directory; the command starts here as secrets-broker-runner, which does not grant write access")
+	projects.AddCommand(update)
 	var removeConfirmation string
 	remove := &cobra.Command{
 		Use:   "remove ALIAS --confirm ALIAS",
