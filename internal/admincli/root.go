@@ -25,6 +25,7 @@ const (
 type projectEditor interface {
 	ListProjects() ([]admin.ProjectSummary, error)
 	GetProject(alias string) (admin.ProjectDetail, error)
+	CheckProjectPath(ctx context.Context, alias string) (admin.PathCheckResult, error)
 	ListAllowlist(alias string) ([][]string, error)
 	CreateProject(input admin.ProjectInput) (bool, error)
 	UpdateProjectMetadata(alias string, input admin.ProjectMetadataUpdate) (bool, error)
@@ -287,6 +288,60 @@ func newRootCommandWithAccess(
 		},
 	})
 	projects.AddCommand(access)
+	path := &cobra.Command{
+		Use:   "path",
+		Short: "Check configured project directory readiness offline",
+		Long:  "Check path resolution and access as the deployed worker and runner. Runner write access is advisory. The check does not create a file, read the BWS token, contact Bitwarden or the approval relay, or run an allowlisted command.",
+	}
+	path.AddCommand(&cobra.Command{
+		Use:   "check ALIAS",
+		Short: "Check path resolution and worker and runner access without BWS or approval",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := editor.CheckProjectPath(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			resolution := "could not resolve"
+			worker, runner, write := "not checked", "not checked", "not checked"
+			switch result.Resolution {
+			case admin.PathResolved:
+				resolution = fmt.Sprintf("resolved to %q", result.ResolvedPath)
+				worker = "cannot enter"
+				if result.WorkerCanEnter {
+					worker = "can enter"
+				}
+				runner = "cannot enter"
+				if result.RunnerCanEnter {
+					runner = "can enter"
+				}
+				write = "cannot write (advisory)"
+				if result.RunnerCanWrite {
+					write = "can write (advisory)"
+				}
+			case admin.PathMissing:
+				resolution = "missing or dangling symlink"
+			case admin.PathNotDirectory:
+				resolution = "not a directory"
+			case admin.PathUnresolvable:
+				// The default message is intentionally free of raw filesystem errors.
+			default:
+				return fmt.Errorf("path diagnostic returned an invalid result")
+			}
+			if _, err := fmt.Fprintf(
+				stdout,
+				"Project: %q\nConfigured path: %q\nPath: %s\nWorker: %s\nRunner: %s\nRunner write: %s\n",
+				result.Alias, result.ConfiguredPath, resolution, worker, runner, write,
+			); err != nil {
+				return fmt.Errorf("writing path diagnostic: %w", err)
+			}
+			if !result.Ready() {
+				onDiagnosticFailure()
+			}
+			return nil
+		},
+	})
+	projects.AddCommand(path)
 
 	recovery := &cobra.Command{
 		Use:   "recovery",

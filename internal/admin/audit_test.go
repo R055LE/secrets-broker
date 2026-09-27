@@ -25,6 +25,7 @@ type fakeMutationEditor struct {
 	calls          int
 	alias          string
 	detail         ProjectDetail
+	pathResult     PathCheckResult
 	recoveryID     string
 	confirmation   string
 	recoveryResult RecoveryResult
@@ -38,6 +39,11 @@ func (f *fakeMutationEditor) ListProjects() ([]ProjectSummary, error) {
 func (f *fakeMutationEditor) GetProject(alias string) (ProjectDetail, error) {
 	f.alias = alias
 	return f.detail, f.err
+}
+
+func (f *fakeMutationEditor) CheckProjectPath(_ context.Context, alias string) (PathCheckResult, error) {
+	f.alias = alias
+	return f.pathResult, f.err
 }
 
 func (f *fakeMutationEditor) ListAllowlist(string) ([][]string, error) {
@@ -434,6 +440,9 @@ func TestAuditedEditorDoesNotAuditReadOnlyOperations(t *testing.T) {
 	}
 	if _, err := audited.ListAllowlist("project"); err != nil {
 		t.Fatalf("ListAllowlist: %v", err)
+	}
+	if _, err := audited.CheckProjectPath(context.Background(), "project"); err != nil {
+		t.Fatalf("CheckProjectPath: %v", err)
 	}
 	if _, err := audited.ListRecoveries(); err != nil {
 		t.Fatalf("ListRecoveries: %v", err)
