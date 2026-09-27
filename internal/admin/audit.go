@@ -17,12 +17,13 @@ import (
 )
 
 const (
-	MutationCreateProject   = "create_project"
-	MutationSetApproval     = "set_approval"
-	MutationAddAllowlist    = "add_allowlist"
-	MutationRemoveAllowlist = "remove_allowlist"
-	MutationRemoveProject   = "remove_project"
-	MutationRestoreProject  = "restore_project"
+	MutationCreateProject         = "create_project"
+	MutationUpdateProjectMetadata = "update_project_metadata"
+	MutationSetApproval           = "set_approval"
+	MutationAddAllowlist          = "add_allowlist"
+	MutationRemoveAllowlist       = "remove_allowlist"
+	MutationRemoveProject         = "remove_project"
+	MutationRestoreProject        = "restore_project"
 
 	MutationChanged  = "changed"
 	MutationNoChange = "no_change"
@@ -35,6 +36,7 @@ type ProjectEditor interface {
 	CheckProjectPath(ctx context.Context, alias string) (PathCheckResult, error)
 	ListAllowlist(alias string) ([][]string, error)
 	CreateProject(input ProjectInput) (bool, error)
+	UpdateProjectMetadata(alias string, input ProjectMetadataUpdate) (bool, error)
 	SetApproval(alias, mode string) (bool, error)
 	AddAllowlist(alias string, argv []string) (bool, error)
 	RemoveAllowlist(alias string, argv []string) (bool, error)
@@ -50,6 +52,7 @@ type MutationStart struct {
 	ApprovalMode string
 	Argv         []string
 	RecoveryID   string
+	Fields       []string
 }
 
 type MutationFinish struct {
@@ -114,6 +117,27 @@ func (e *AuditedEditor) CreateProject(input ProjectInput) (bool, error) {
 		ApprovalMode: ModeConfirm,
 	}, func() (bool, error) {
 		return e.editor.CreateProject(input)
+	})
+}
+
+func (e *AuditedEditor) UpdateProjectMetadata(alias string, input ProjectMetadataUpdate) (bool, error) {
+	fields := make([]string, 0, 3)
+	if input.BWSProjectID != nil {
+		fields = append(fields, "bws_project_id")
+	}
+	if input.TokenEntry != nil {
+		fields = append(fields, "token_entry")
+	}
+	if input.WorkingDir != nil {
+		fields = append(fields, "working_dir")
+	}
+	return e.mutate(MutationStart{
+		ActorUID:  e.actorUID,
+		Project:   alias,
+		Operation: MutationUpdateProjectMetadata,
+		Fields:    fields,
+	}, func() (bool, error) {
+		return e.editor.UpdateProjectMetadata(alias, input)
 	})
 }
 
@@ -253,6 +277,7 @@ type mutationRecord struct {
 	ArgvSHA256   string    `json:"argv_sha256,omitempty"`
 	ArgvCount    int       `json:"argv_count,omitempty"`
 	RecoveryID   string    `json:"recovery_id,omitempty"`
+	Fields       []string  `json:"fields,omitempty"`
 	Outcome      string    `json:"outcome,omitempty"`
 }
 
@@ -277,6 +302,7 @@ func (l *MutationJSONLLogger) Start(_ context.Context, rec MutationStart) (strin
 		ArgvSHA256:   argvSHA256,
 		ArgvCount:    len(rec.Argv),
 		RecoveryID:   rec.RecoveryID,
+		Fields:       rec.Fields,
 	})
 	if err != nil {
 		return "", err
