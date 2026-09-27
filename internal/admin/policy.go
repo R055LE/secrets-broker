@@ -55,6 +55,12 @@ type ProjectInput struct {
 	WorkingDir   string
 }
 
+type ProjectMetadataUpdate struct {
+	BWSProjectID *string
+	TokenEntry   *string
+	WorkingDir   *string
+}
+
 type Editor struct {
 	path          string
 	expectedOwner uint32
@@ -165,6 +171,82 @@ func (e *Editor) CreateProject(input ProjectInput) (bool, error) {
 		return false, errors.New("updated policy changed fields outside the new project")
 	}
 
+	if err := e.writeAtomic(updated, metadata); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (e *Editor) UpdateProjectMetadata(alias string, input ProjectMetadataUpdate) (bool, error) {
+	if input.BWSProjectID == nil && input.TokenEntry == nil && input.WorkingDir == nil {
+		return false, errors.New("at least one project metadata field is required")
+	}
+	if input.BWSProjectID != nil && *input.BWSProjectID == "" {
+		return false, errors.New("bws project ID is required")
+	}
+	if input.TokenEntry != nil && *input.TokenEntry == "" {
+		return false, errors.New("token entry is required")
+	}
+	if input.WorkingDir != nil {
+		if *input.WorkingDir == "" {
+			return false, errors.New("working directory is required")
+		}
+		if !filepath.IsAbs(*input.WorkingDir) {
+			return false, errors.New("working directory must be an absolute path")
+		}
+	}
+
+	data, cfg, metadata, err := e.readPolicy()
+	if err != nil {
+		return false, err
+	}
+	projectIndex, err := findProject(cfg, alias)
+	if err != nil {
+		return false, err
+	}
+	project := cfg.Projects[projectIndex]
+	updated := data
+	fields := []struct {
+		name    string
+		current string
+		value   *string
+		apply   func(string)
+	}{
+		{"bws_project_id", project.BWSProjectID, input.BWSProjectID, func(v string) { project.BWSProjectID = v }},
+		{"token_entry", project.TokenEntry, input.TokenEntry, func(v string) { project.TokenEntry = v }},
+		{"working_dir", project.WorkingDir, input.WorkingDir, func(v string) { project.WorkingDir = v }},
+	}
+	changed := false
+	for _, field := range fields {
+		if field.value == nil || *field.value == field.current {
+			continue
+		}
+		updated, err = replaceProjectField(updated, len(cfg.Projects), projectIndex, field.name, *field.value)
+		if err != nil {
+			return false, err
+		}
+		field.apply(*field.value)
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
+	updatedConfig, err := config.Parse(updated)
+	if err != nil {
+		return false, fmt.Errorf("validating updated policy: %w", err)
+	}
+	if err := updatedConfig.ValidateWorker(); err != nil {
+		return false, fmt.Errorf("validating updated worker policy: %w", err)
+	}
+	expected := *cfg
+	expected.Projects = append([]config.Project(nil), cfg.Projects...)
+	expected.Projects[projectIndex] = project
+	if !reflect.DeepEqual(&expected, updatedConfig) {
+		return false, errors.New("updated policy changed fields outside the selected project metadata")
+	}
+	if e.beforeWrite != nil {
+		e.beforeWrite()
+	}
 	if err := e.writeAtomic(updated, metadata); err != nil {
 		return false, err
 	}
@@ -677,6 +759,29 @@ func replaceApproval(data []byte, projectCount, projectIndex int, approval strin
 	updated = append(updated, data[:insertAt]...)
 	updated = append(updated, line...)
 	updated = append(updated, data[insertAt:]...)
+	return updated, nil
+}
+
+func replaceProjectField(data []byte, projectCount, projectIndex int, field, value string) ([]byte, error) {
+	start, end, err := projectBlockBounds(data, projectCount, projectIndex)
+	if err != nil {
+		return nil, err
+	}
+	pattern := regexp.MustCompile(`(?m)^([\t ]*` + field + `[\t ]*=[\t ]*)(?:"(?:\\.|[^"\\\r\n])*"|'[^'\r\n]*')([\t ]*(?:#[^\r\n]*)?\r?)$`)
+	matches := pattern.FindAllSubmatchIndex(data[start:end], -1)
+	if len(matches) != 1 {
+		return nil, fmt.Errorf("policy layout is not editable: expected one single-line %s field in the selected project", field)
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("encoding %s: %w", field, err)
+	}
+	valueStart := start + matches[0][3]
+	valueEnd := start + matches[0][4]
+	updated := make([]byte, 0, len(data)-valueEnd+valueStart+len(encoded))
+	updated = append(updated, data[:valueStart]...)
+	updated = append(updated, encoded...)
+	updated = append(updated, data[valueEnd:]...)
 	return updated, nil
 }
 
