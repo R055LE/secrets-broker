@@ -21,6 +21,7 @@ type fakeProjectEditor struct {
 	alias          string
 	mode           string
 	detail         admin.ProjectDetail
+	pathResult     admin.PathCheckResult
 	allow          [][]string
 	argv           []string
 	input          admin.ProjectInput
@@ -80,6 +81,12 @@ func (f *fakeProjectEditor) GetProject(alias string) (admin.ProjectDetail, error
 	f.calls++
 	f.alias = alias
 	return f.detail, f.err
+}
+
+func (f *fakeProjectEditor) CheckProjectPath(_ context.Context, alias string) (admin.PathCheckResult, error) {
+	f.calls++
+	f.alias = alias
+	return f.pathResult, f.err
 }
 
 func (f *fakeProjectEditor) ListAllowlist(alias string) ([][]string, error) {
@@ -281,6 +288,38 @@ func TestProjectsAccessCheckReturnsTwoForLocalOrOutputFailure(t *testing.T) {
 			t.Fatalf("code = %d, stderr = %q", code, stderr.String())
 		}
 	})
+}
+
+func TestProjectsPathCheckReportsSeparateAccessAndAdvisoryWrite(t *testing.T) {
+	editor := &fakeProjectEditor{pathResult: admin.PathCheckResult{
+		Alias: "alpha", ConfiguredPath: "/srv/project", ResolvedPath: "/srv/project",
+		Resolution: admin.PathResolved, WorkerCanEnter: true, RunnerCanEnter: true,
+	}}
+	var stdout, stderr bytes.Buffer
+	if code := execute(func() int { return 0 }, editor, []string{"projects", "path", "check", "alpha"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if editor.alias != "alpha" || editor.calls != 1 {
+		t.Fatalf("path checker called with %q, calls = %d", editor.alias, editor.calls)
+	}
+	for _, want := range []string{"resolved to", "Worker: can enter", "Runner: can enter", "Runner write: cannot write (advisory)"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("output = %q, missing %q", stdout.String(), want)
+		}
+	}
+}
+
+func TestProjectsPathCheckReportsMissingWithoutIdentityProbe(t *testing.T) {
+	editor := &fakeProjectEditor{pathResult: admin.PathCheckResult{
+		Alias: "alpha", ConfiguredPath: "/srv/missing", Resolution: admin.PathMissing,
+	}}
+	var stdout, stderr bytes.Buffer
+	if code := execute(func() int { return 0 }, editor, []string{"projects", "path", "check", "alpha"}, &stdout, &stderr); code != 1 {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "missing") || !strings.Contains(stdout.String(), "not checked") {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
 }
 
 func TestProjectsSetApproval(t *testing.T) {
@@ -543,6 +582,7 @@ func TestAdminCommandsRequireRoot(t *testing.T) {
 	for _, args := range [][]string{
 		{"projects", "list"},
 		{"projects", "show", "project"},
+		{"projects", "path", "check", "project"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			editor := &fakeProjectEditor{}

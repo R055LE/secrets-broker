@@ -32,6 +32,7 @@ const (
 type ProjectEditor interface {
 	ListProjects() ([]ProjectSummary, error)
 	GetProject(alias string) (ProjectDetail, error)
+	CheckProjectPath(ctx context.Context, alias string) (PathCheckResult, error)
 	ListAllowlist(alias string) ([][]string, error)
 	CreateProject(input ProjectInput) (bool, error)
 	SetApproval(alias, mode string) (bool, error)
@@ -91,6 +92,10 @@ func (e *AuditedEditor) ListProjects() ([]ProjectSummary, error) {
 
 func (e *AuditedEditor) GetProject(alias string) (ProjectDetail, error) {
 	return e.editor.GetProject(alias)
+}
+
+func (e *AuditedEditor) CheckProjectPath(ctx context.Context, alias string) (PathCheckResult, error) {
+	return e.editor.CheckProjectPath(ctx, alias)
 }
 
 func (e *AuditedEditor) ListAllowlist(alias string) ([][]string, error) {
