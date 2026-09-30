@@ -12,6 +12,7 @@ import (
 
 	"github.com/R055LE/secrets-broker/internal/accessdiag"
 	"github.com/R055LE/secrets-broker/internal/admin"
+	"github.com/R055LE/secrets-broker/internal/projectlist"
 )
 
 type fakeProjectEditor struct {
@@ -34,9 +35,31 @@ type fakeProjectEditor struct {
 }
 
 type fakeAccessChecker struct {
-	result  accessdiag.Result
-	err     error
-	aliases []string
+	result    accessdiag.Result
+	available projectlist.Result
+	err       error
+	aliases   []string
+}
+
+func (c *fakeAccessChecker) ListAvailable(_ context.Context, consume func(projectlist.Result) error) error {
+	if c.err != nil {
+		return c.err
+	}
+	return consume(c.available)
+}
+
+func TestAvailableProjectsShowsNamesAndIDs(t *testing.T) {
+	checker := &fakeAccessChecker{available: projectlist.Result{
+		Version:  projectlist.Version,
+		Projects: []projectlist.Project{{ID: "project-id", Name: "Example"}},
+	}}
+	var stdout, stderr bytes.Buffer
+	code := executeWithAccess(func() int { return 0 }, &fakeProjectEditor{}, checker,
+		[]string{"projects", "available"}, &stdout, &stderr)
+	if code != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "project-id") ||
+		!strings.Contains(stdout.String(), "Example") {
+		t.Fatalf("code = %d, stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
+	}
 }
 
 func (c *fakeAccessChecker) Run(

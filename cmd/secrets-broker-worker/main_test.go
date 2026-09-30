@@ -15,7 +15,7 @@ import (
 )
 
 func TestRunRejectsArguments(t *testing.T) {
-	for _, args := range [][]string{{"unknown"}, {"access-check", "one", "two"}} {
+	for _, args := range [][]string{{"unknown"}, {"access-check", "one", "two"}, {"projects-list", "extra"}} {
 		var stderr bytes.Buffer
 		status := run(args, worker.NewServer(), strings.NewReader(""), &bytes.Buffer{}, &stderr)
 		if status != 2 {
@@ -24,6 +24,23 @@ func TestRunRejectsArguments(t *testing.T) {
 		if !strings.Contains(stderr.String(), "usage:") {
 			t.Fatalf("args = %#v, stderr = %q", args, stderr.String())
 		}
+	}
+}
+
+func TestRunProjectsListEmitsOnlyNamesAndIDs(t *testing.T) {
+	server := accessCheckServer(t, &execx.FakeRunner{
+		PassthroughExitCode: 0,
+		PassthroughStdout: `[{
+			"object":"project", "id":"project-id", "name":"Example",
+			"futureSensitiveField":"sentinel-secret"
+		}]`,
+	})
+	var stdout, stderr bytes.Buffer
+	status := run([]string{"projects-list"}, server, strings.NewReader(""), &stdout, &stderr)
+	if status != 0 || stderr.Len() != 0 ||
+		!strings.Contains(stdout.String(), "project-id") ||
+		strings.Contains(stdout.String(), "sentinel-secret") {
+		t.Fatalf("status = %d, stdout = %q, stderr = %q", status, stdout.String(), stderr.String())
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/R055LE/secrets-broker/internal/accessdiag"
 	"github.com/R055LE/secrets-broker/internal/admin"
 	"github.com/R055LE/secrets-broker/internal/execx"
+	"github.com/R055LE/secrets-broker/internal/projectlist"
 	"github.com/spf13/cobra"
 )
 
@@ -288,6 +289,28 @@ func newRootCommandWithAccess(
 		},
 	})
 	projects.AddCommand(access)
+	projects.AddCommand(&cobra.Command{
+		Use:   "available",
+		Short: "List Bitwarden projects visible to the deployed worker",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return diagnostic.ListAvailable(cmd.Context(), func(result projectlist.Result) error {
+				writer := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+				if _, err := fmt.Fprintln(writer, "BWS_PROJECT_ID\tNAME"); err != nil {
+					return fmt.Errorf("writing available projects: %w", err)
+				}
+				for _, project := range result.Projects {
+					if _, err := fmt.Fprintf(writer, "%s\t%s\n", project.ID, project.Name); err != nil {
+						return fmt.Errorf("writing available projects: %w", err)
+					}
+				}
+				if err := writer.Flush(); err != nil {
+					return fmt.Errorf("writing available projects: %w", err)
+				}
+				return nil
+			})
+		},
+	})
 	path := &cobra.Command{
 		Use:   "path",
 		Short: "Check configured project directory readiness offline",
@@ -493,6 +516,10 @@ func (unavailableAccessDiagnostic) Run(
 	func(accessdiag.Result) error,
 ) (accessdiag.Outcome, error) {
 	return "", fmt.Errorf("access diagnostic unavailable")
+}
+
+func (unavailableAccessDiagnostic) ListAvailable(context.Context, func(projectlist.Result) error) error {
+	return fmt.Errorf("project list diagnostic unavailable")
 }
 
 func recoveryMutationError(err error, result admin.RecoveryResult) error {
