@@ -115,7 +115,7 @@ editable service until these checks pass with a temporary root-only Unix listene
 
 - Installer checks prove opt-in installation, empty Tailscale operator setting, exact configured
   user login, socket owner and mode, service ownership, fixed paths, no new agent sudoers command,
-  private Serve only, and no broker-host TCP listener.
+  private Serve only, and no application-owned TCP listener or LAN/public route.
 - Handler tests prove peer and header authorization before both reads and writes, agent and missing
   or forged-identity denial. A live phone test repeats those checks through Serve.
 - Browser tests cover cross-origin and missing-Origin POSTs, forged and replayed tokens, stale
