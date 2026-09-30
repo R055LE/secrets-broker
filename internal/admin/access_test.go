@@ -13,13 +13,22 @@ import (
 
 	"github.com/R055LE/secrets-broker/internal/accessdiag"
 	"github.com/R055LE/secrets-broker/internal/execx"
+	"github.com/R055LE/secrets-broker/internal/projectlist"
 )
 
 type fakeAccessChecker struct {
-	result   accessdiag.Result
-	err      error
-	aliases  []string
-	sequence *[]string
+	result    accessdiag.Result
+	available projectlist.Result
+	err       error
+	aliases   []string
+	sequence  *[]string
+}
+
+func (c *fakeAccessChecker) ListAvailable(context.Context) (projectlist.Result, error) {
+	if c.sequence != nil {
+		*c.sequence = append(*c.sequence, "worker")
+	}
+	return c.available, c.err
 }
 
 type orderedAccessLogger struct {
@@ -80,6 +89,45 @@ func TestWorkerAccessCheckerUsesFixedRunuserBoundary(t *testing.T) {
 	wantArgs := []string{"-u", "secrets-broker", "--", "/usr/local/libexec/secrets-broker-worker", "access-check", "project"}
 	if call.Method != "RunPassthrough" || call.Name != "/usr/sbin/runuser" || !reflect.DeepEqual(call.Args, wantArgs) || call.Env != nil || call.Dir != "/" {
 		t.Fatalf("call = %#v", call)
+	}
+}
+
+func TestWorkerProjectListUsesFixedRunuserBoundary(t *testing.T) {
+	want := projectlist.Result{Version: projectlist.Version, Projects: []projectlist.Project{{ID: "id", Name: "Example"}}}
+	encoded, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &execx.FakeRunner{PassthroughExitCode: 0, PassthroughStdout: string(encoded)}
+	got, err := NewWorkerAccessChecker(runner).ListAvailable(context.Background())
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListAvailable() = %#v, %v", got, err)
+	}
+	wantArgs := []string{"-u", "secrets-broker", "--", "/usr/local/libexec/secrets-broker-worker", "projects-list"}
+	if len(runner.Calls) != 1 || runner.Calls[0].Name != "/usr/sbin/runuser" ||
+		!reflect.DeepEqual(runner.Calls[0].Args, wantArgs) || runner.Calls[0].Env != nil {
+		t.Fatalf("unexpected worker invocation: %#v", runner.Calls)
+	}
+}
+
+func TestAuditedProjectListStartsBeforeWorkerAndFinishes(t *testing.T) {
+	sequence := []string{}
+	checker := &fakeAccessChecker{
+		available: projectlist.Result{Version: projectlist.Version, Projects: []projectlist.Project{{ID: "id", Name: "Example"}}},
+		sequence:  &sequence,
+	}
+	logger := &orderedAccessLogger{sequence: &sequence}
+	diagnostic := NewAuditedAccessDiagnostic(checker, logger, 0)
+	err := diagnostic.ListAvailable(context.Background(), func(projectlist.Result) error {
+		sequence = append(sequence, "output")
+		return nil
+	})
+	if err != nil || !reflect.DeepEqual(sequence, []string{"start", "worker", "output", "finish"}) {
+		t.Fatalf("sequence = %#v, err = %v", sequence, err)
+	}
+	if len(logger.starts) != 1 || logger.starts[0].Operation != OperationListAvailableProjects ||
+		len(logger.finishes) != 1 || logger.finishes[0].Outcome != "listed" {
+		t.Fatalf("audit start = %#v, finish = %#v", logger.starts, logger.finishes)
 	}
 }
 

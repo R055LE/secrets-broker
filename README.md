@@ -176,6 +176,7 @@ and has no policy-path override.
 
 ```bash
 sudo secrets-broker-admin projects list
+sudo secrets-broker-admin projects available
 sudo secrets-broker-admin projects create github-ops \
   --bws-project-id 00000000-0000-0000-0000-000000000000 \
   --token-entry github-ops-agent \
@@ -204,6 +205,11 @@ worker's BWS access token, or broaden that token's project grants. The `--token-
 meaning depends on the configured resolver backend: under `env` and `file` resolvers it is advisory
 only (a memorable label, commonly the project alias) and is ignored at runtime; only Secret Service
 deployments use it as a lookup key (ADR-0007).
+
+`projects available` asks Bitwarden which projects the deployed worker token can access. It lists
+only each project's ID and name, so you can select the ID for local project creation without
+copying it from Bitwarden. It reads the worker token and contacts Bitwarden, and its invocation is
+audited. It does not retrieve secrets, create projects, or change grants.
 
 The working directory only fixes where the approved command starts. The command still runs as
 `secrets-broker-runner` (ADR-0010), and that account's own file permissions apply. A normal checkout
@@ -276,12 +282,12 @@ if sudo "$admin" projects list | grep -Fq "$accept_alias"; then
 fi
 ```
 
-Every requested project creation, removal, restoration, approval, allowlist mutation, or BWS access
-diagnostic writes a root-owned audit start record before the policy editor or worker runs, followed
-by a `changed`, `no_change`, `failed`, or diagnostic aggregate finish record. A failed start record
-prevents the policy or diagnostic operation. If the policy replacement succeeds but the finish
-record fails, the command reports that the policy changed and leaves the unmatched start record for
-recovery. Project and recovery listings do not write this log.
+Every requested project creation, removal, restoration, approval, allowlist mutation, BWS project
+discovery, or BWS access diagnostic writes a root-owned audit start record before the policy editor
+or worker runs, followed by a `changed`, `no_change`, `failed`, `listed`, or diagnostic aggregate
+finish record. A failed start record prevents the policy or diagnostic operation. If the policy
+replacement succeeds but the finish record fails, the command reports that the policy changed and
+leaves the unmatched start record for recovery. Project and recovery listings do not write this log.
 
 Administrator audit records contain the effective UID, project alias, operation, requested
 approval mode or a SHA-256 digest and count of the exact argv, outcome, timestamps, and a

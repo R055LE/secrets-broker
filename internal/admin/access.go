@@ -11,6 +11,7 @@ import (
 	"github.com/R055LE/secrets-broker/internal/accessdiag"
 	"github.com/R055LE/secrets-broker/internal/boundedio"
 	"github.com/R055LE/secrets-broker/internal/execx"
+	"github.com/R055LE/secrets-broker/internal/projectlist"
 )
 
 const (
@@ -19,12 +20,14 @@ const (
 	accessWorkerUser  = "secrets-broker"
 	accessOutputLimit = 2 << 20
 
-	OperationCheckProjectAccess = "check_project_access"
-	OutcomeFailed               = "failed"
+	OperationCheckProjectAccess    = "check_project_access"
+	OperationListAvailableProjects = "list_available_projects"
+	OutcomeFailed                  = "failed"
 )
 
 type AccessChecker interface {
 	CheckAccess(ctx context.Context, alias string) (accessdiag.Result, error)
+	ListAvailable(ctx context.Context) (projectlist.Result, error)
 }
 
 type WorkerAccessChecker struct {
@@ -75,12 +78,38 @@ func (c *WorkerAccessChecker) CheckAccess(ctx context.Context, alias string) (ac
 	return result, nil
 }
 
+func (c *WorkerAccessChecker) ListAvailable(ctx context.Context) (projectlist.Result, error) {
+	stdout := boundedio.NewBuffer(accessOutputLimit)
+	stderr := boundedio.NewBuffer(accessOutputLimit)
+	exitCode, err := c.runner.RunPassthrough(
+		ctx,
+		accessRunuserPath,
+		[]string{"-u", accessWorkerUser, "--", accessWorkerPath, "projects-list"},
+		nil, "/", nil, stdout, stderr,
+	)
+	if err != nil || exitCode != 0 || stdout.Exceeded() || stderr.Exceeded() || len(stderr.Bytes()) != 0 {
+		return projectlist.Result{}, errors.New("worker project list failed")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
+	decoder.DisallowUnknownFields()
+	var result projectlist.Result
+	if err := decoder.Decode(&result); err != nil {
+		return projectlist.Result{}, errors.New("worker project list returned an invalid result")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF || result.Validate() != nil {
+		return projectlist.Result{}, errors.New("worker project list returned an invalid result")
+	}
+	return result, nil
+}
+
 type AccessDiagnostic interface {
 	Run(
 		ctx context.Context,
 		alias string,
 		consume func(accessdiag.Result) error,
 	) (accessdiag.Outcome, error)
+	ListAvailable(ctx context.Context, consume func(projectlist.Result) error) error
 }
 
 type AuditedAccessDiagnostic struct {
@@ -121,4 +150,30 @@ func (d *AuditedAccessDiagnostic) Run(
 		finishErr = fmt.Errorf("finishing administrator audit: %w", finishErr)
 	}
 	return result.Outcome, errors.Join(checkErr, consumeErr, finishErr)
+}
+
+func (d *AuditedAccessDiagnostic) ListAvailable(
+	ctx context.Context,
+	consume func(projectlist.Result) error,
+) error {
+	mutationID, err := d.logger.Start(ctx, MutationStart{
+		ActorUID: d.actorUID, Operation: OperationListAvailableProjects,
+	})
+	if err != nil {
+		return fmt.Errorf("starting administrator audit: %w", err)
+	}
+	result, listErr := d.checker.ListAvailable(ctx)
+	var consumeErr error
+	if listErr == nil {
+		consumeErr = consume(result)
+	}
+	outcome := OutcomeFailed
+	if listErr == nil && consumeErr == nil {
+		outcome = "listed"
+	}
+	finishErr := d.logger.Finish(ctx, mutationID, MutationFinish{Outcome: outcome})
+	if finishErr != nil {
+		finishErr = fmt.Errorf("finishing administrator audit: %w", finishErr)
+	}
+	return errors.Join(listErr, consumeErr, finishErr)
 }
