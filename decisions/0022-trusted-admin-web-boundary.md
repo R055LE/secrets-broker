@@ -65,7 +65,8 @@ this route and receives no socket access.
 - Send `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
   `X-Frame-Options: DENY`, and a restrictive Content Security Policy with no inline script and
   `frame-ancestors 'none'`. Never put tokens or policy details in URLs. Show sanitized outcomes;
-  omit credentials, secret names and values, raw BWS output, and recovery artifact contents.
+  the first release omits credentials, secret names and values, raw BWS output, and recovery artifact
+  contents. A later human-only secret-entry surface needs its own reviewed boundary.
 - For each audited web operation, add the authenticated Tailscale login as actor attribution to the
   existing start and finish record without replacing the effective UID. Keep the existing correlation ID and fail-closed
   start. If the finish record fails after a policy change, report that the change may have committed
