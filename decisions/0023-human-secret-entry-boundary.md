@@ -19,11 +19,13 @@ cgo and a Rust library. The existing release bundles build their Go binaries wit
 for two architectures. Adding the SDK to the worker or main admin binary would change that release
 boundary.
 
-Bitwarden [documents](https://bitwarden.com/help/machine-accounts/) that a machine account's
-read/write project permission can also create new projects. A write token therefore carries more
-Bitwarden authority than the two UI operations below need. Project scoping and a separate account
-reduce exposure, but do not remove that permission. This tradeoff requires explicit acceptance
-before the credential is created.
+Bitwarden's [machine-account documentation](https://bitwarden.com/help/machine-accounts/) says a
+read/write project grant can also create projects. Its [CLI documentation](https://bitwarden.com/help/secrets-manager-cli/)
+also says a read-only machine account can create projects. Treat project creation as possible for
+either token until a disposable-account test resolves that conflict. The runtime worker invokes only
+fixed read/run commands, but a stolen token could have broader authority. A separate writer account
+reduces exposure to existing secrets; it does not remove project-creation authority. This tradeoff
+requires explicit acceptance before the writer credential is created.
 
 ## Decision
 
@@ -67,7 +69,7 @@ before the credential is created.
 | Wrong project or secret is overwritten | Select from existing local alias and writer-visible project; confirm current secret ID and project before rotate |
 | Error leaks plaintext through logs or response | Fixed sanitized errors, metadata-only response and audit, no raw SDK output |
 | Remote write succeeds but response or audit finish fails | Report uncertainty, no automatic retry, reconcile in Bitwarden |
-| Write token is stolen from the trusted root boundary | Bitwarden grant can include project creation; revoke the token and review Bitwarden events |
+| A Bitwarden token is stolen from a trusted boundary | Bitwarden docs conflict on read-only project creation; revoke the token and review Bitwarden events |
 
 Root, the trusted phone, the Tailscale identity boundary, the SDK, and Bitwarden remain trusted.
 The browser and helper necessarily hold the newly entered value briefly in memory. This design
@@ -75,9 +77,11 @@ does not claim memory erasure or protection from a compromised host administrato
 
 ## Implementation and acceptance
 
-1. Prove the pinned SDK can create and update a disposable secret through the separately scoped
-   token without logging or returning its value. Verify native build and release provenance for
-   the optional Linux amd64 helper. Keep this proof out of the agent's context.
+1. Test project-creation authority with disposable read-only and read/write machine accounts to
+   resolve the documentation conflict. Prove the pinned SDK can create and update a disposable
+   secret through the separately scoped token without logging or returning its value. Verify native
+   build and release provenance for the optional Linux amd64 helper. Keep this proof out of the
+   agent's context.
 2. Add the fixed writer helper and metadata-only protocol. Test rejected overrides, project
    mismatch, token-file permissions, bounded input, and uncertain responses with fakes.
 3. Add browser create/rotate forms and terminal prompts. Test authorization, CSRF, replay, no
