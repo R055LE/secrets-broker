@@ -103,6 +103,9 @@ Barnabas currently reports no local Tailscale operator, while the host documenta
 an older `--operator=ross` setup. The live boundary has not been proven. Do not implement the
 editable service until these checks pass with a temporary root-only Unix listener:
 
+The reviewed `scripts/admin-identity-probe.py` is the one-time listener for this check. Run a pinned
+git object as root, then remove the temporary Serve route and stop the listener. Do not install it.
+
 1. Confirm the agent account cannot change Serve configuration or reach the Unix listener. Confirm
    the intended personal phone reaches the listener through private HTTPS Serve, and record the
    listener's peer UID and exact Tailscale login header.
