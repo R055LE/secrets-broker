@@ -64,10 +64,23 @@ type ProjectMetadataUpdate struct {
 }
 
 type Editor struct {
-	path          string
-	expectedOwner uint32
-	recovery      RecoveryArtifacts
-	beforeWrite   func()
+	path             string
+	expectedOwner    uint32
+	recovery         RecoveryArtifacts
+	beforeWrite      func()
+	expectedRevision string
+}
+
+var (
+	ErrPolicyChanged = errors.New("policy changed; reload before submitting")
+	ErrPolicyBusy    = errors.New("another administrator is updating policy")
+)
+
+// WithRevision rejects a browser edit whose displayed policy has been replaced.
+func (e *Editor) WithRevision(revision string) *Editor {
+	copy := *e
+	copy.expectedRevision = revision
+	return &copy
 }
 
 func NewEditor(path string, expectedOwner uint32) *Editor {
@@ -599,6 +612,12 @@ func (e *Editor) readPolicy() ([]byte, *config.Config, fileMetadata, error) {
 	if !sameFile(before, after) {
 		return nil, nil, fileMetadata{}, errors.New("policy changed while it was being read")
 	}
+	if e.expectedRevision != "" {
+		digest := sha256.Sum256(data)
+		if hex.EncodeToString(digest[:]) != e.expectedRevision {
+			return nil, nil, fileMetadata{}, ErrPolicyChanged
+		}
+	}
 
 	cfg, err := config.Parse(data)
 	if err != nil {
@@ -643,7 +662,7 @@ func (e *Editor) writeAtomic(data []byte, original fileMetadata) error {
 	if len(data) > maxPolicyBytes {
 		return fmt.Errorf("updated policy exceeds maximum size of %d bytes", maxPolicyBytes)
 	}
-	lock, err := lockPolicy(e.path)
+	lock, err := lockPolicy(e.path, e.expectedRevision != "")
 	if err != nil {
 		return err
 	}
@@ -720,14 +739,21 @@ func (e *Editor) writeAtomic(data []byte, original fileMetadata) error {
 	return nil
 }
 
-func lockPolicy(path string) (*os.File, error) {
+func lockPolicy(path string, nonblocking bool) (*os.File, error) {
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, fmt.Errorf("opening policy for mutation lock: %w", err)
 	}
 	file := os.NewFile(uintptr(fd), path)
-	if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {
+	flags := syscall.LOCK_EX
+	if nonblocking {
+		flags |= syscall.LOCK_NB
+	}
+	if err := syscall.Flock(fd, flags); err != nil {
 		_ = file.Close()
+		if nonblocking && errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, ErrPolicyBusy
+		}
 		return nil, fmt.Errorf("locking policy for mutation: %w", err)
 	}
 	return file, nil

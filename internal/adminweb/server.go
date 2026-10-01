@@ -16,10 +16,13 @@ import (
 )
 
 type peerKey struct{}
+type revisionKey struct{}
+type changeKey struct{}
 
 type formToken struct {
 	action, login, revision, target string
 	expires                         time.Time
+	change                          *policyChange
 }
 
 type Server struct {
@@ -34,26 +37,32 @@ type Server struct {
 	access         admin.AccessDiagnostic
 	available      []projectlist.Project
 	availableUntil time.Time
+	edit           func(string) policyMutator
+	checks         map[string]projectChecks
 }
 
 func NewServer(cfg Config) *Server {
 	s := &Server{
-		cfg: cfg, mux: http.NewServeMux(), tokens: make(map[string]formToken),
+		cfg: cfg, mux: http.NewServeMux(), tokens: make(map[string]formToken), checks: make(map[string]projectChecks),
 		now: time.Now, revision: policyRevision,
 	}
 	s.reader = admin.NewEditor(PolicyPath, 0)
 	s.logger = actorLogger{logger: admin.NewMutationJSONLLogger("/var/log/secrets-broker-admin/audit.jsonl"), login: cfg.Login}
 	s.access = admin.NewAuditedAccessDiagnostic(admin.NewWorkerAccessChecker(execx.OSRunner{}), s.logger, 0)
+	s.edit = func(revision string) policyMutator {
+		return admin.NewAuditedEditor(admin.NewEditor(PolicyPath, 0).WithRevision(revision), s.logger, 0)
+	}
 	s.registerPages()
+	s.registerControls()
 	return s
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	peer, _ := r.Context().Value(peerKey{}).(bool)
 	login := r.Header.Values("Tailscale-User-Login")
 	if !peer || len(login) != 1 || login[0] != s.cfg.Login || r.Host != s.cfg.Host || r.URL.Host != "" {
@@ -152,6 +161,8 @@ func (s *Server) protectPost(action string, next http.HandlerFunc) http.HandlerF
 		// Complete audited work after a browser disconnects, with a finite operation deadline.
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
 		defer cancel()
+		ctx = context.WithValue(ctx, revisionKey{}, entry.revision)
+		ctx = context.WithValue(ctx, changeKey{}, entry.change)
 		next(w, r.WithContext(ctx))
 	}
 }

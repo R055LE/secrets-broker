@@ -1,7 +1,9 @@
 package admin
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -654,6 +656,44 @@ func TestEditorRejectsSymlinkAndUnexpectedOwner(t *testing.T) {
 func TestReplaceApprovalRejectsUnsupportedLayout(t *testing.T) {
 	if _, err := replaceApproval([]byte("projects = []\n"), 1, 0, config.ApprovalNever); err == nil {
 		t.Fatal("expected unsupported layout to be rejected")
+	}
+}
+
+func TestRevisionGuardRejectsReplacementWithoutChangingPolicy(t *testing.T) {
+	path := writePolicy(t, policyWithProjects(projectBlock("demo", `approval = "allowlisted-prompt"`)))
+	editor := NewEditor(path, uint32(os.Getuid()))
+	revision, err := editor.Revision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	guarded := editor.WithRevision(revision)
+	if _, err := editor.SetApproval("demo", ModeAutomatic); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(path)
+	if changed, err := guarded.AddAllowlist("demo", []string{"/usr/bin/new"}); changed || !errors.Is(err, ErrPolicyChanged) {
+		t.Fatalf("stale write: %v %v", changed, err)
+	}
+	after, _ := os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Fatal("revision failure changed policy")
+	}
+}
+
+func TestRevisionGuardDoesNotWaitForAnotherAdministrator(t *testing.T) {
+	path := writePolicy(t, policyWithProjects(projectBlock("demo", `approval = "allowlisted-prompt"`)))
+	editor := NewEditor(path, uint32(os.Getuid()))
+	revision, err := editor.Revision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := lockPolicy(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Close() }()
+	if changed, err := editor.WithRevision(revision).SetApproval("demo", ModeAutomatic); changed || !errors.Is(err, ErrPolicyBusy) {
+		t.Fatalf("busy edit: %v %v", changed, err)
 	}
 }
 

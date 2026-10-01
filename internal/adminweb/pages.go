@@ -24,15 +24,21 @@ type projectRow struct {
 }
 
 type pageData struct {
-	Login, ApprovalURL, Message            string
-	Warning                                bool
-	Projects                               []projectRow
-	Detail                                 *admin.ProjectDetail
-	Index                                  int
-	Available                              []projectlist.Project
-	DiscoveryToken, PathToken, AccessToken string
-	Path                                   *admin.PathCheckResult
-	Access                                 *accessdiag.Result
+	Login, ApprovalURL, Message                                  string
+	Warning                                                      bool
+	Projects                                                     []projectRow
+	Detail                                                       *admin.ProjectDetail
+	Index                                                        int
+	Available                                                    []projectlist.Project
+	DiscoveryToken, PathToken, AccessToken                       string
+	Path                                                         *admin.PathCheckResult
+	Access                                                       *accessdiag.Result
+	CreateToken, MetadataToken, ModeToken, AddToken, RemoveToken string
+	Change                                                       *policyChange
+	CommitToken                                                  string
+	Current                                                      *admin.ProjectDetail
+	PathMessage, AccessMessage                                   string
+	PathWarning, AccessWarning                                   bool
 }
 
 func (s *Server) registerPages() {
@@ -52,14 +58,14 @@ func (s *Server) home(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) renderOverview(w http.ResponseWriter, status int, message string, warning bool) {
-	projects, err := s.reader.ListProjects()
+	var projects []admin.ProjectSummary
+	revision, err := s.view(func() error {
+		var err error
+		projects, err = s.reader.ListProjects()
+		return err
+	})
 	if err != nil {
 		http.Error(w, "Local policy cannot be read. Check the administrator CLI on the broker host.", http.StatusServiceUnavailable)
-		return
-	}
-	revision, err := s.revision()
-	if err != nil {
-		http.Error(w, "Local policy cannot be read.", http.StatusServiceUnavailable)
 		return
 	}
 	token, err := s.issueToken("discover", revision)
@@ -76,6 +82,13 @@ func (s *Server) renderOverview(w http.ResponseWriter, status int, message strin
 		data.Available = append([]projectlist.Project(nil), s.available...)
 	}
 	s.mu.Unlock()
+	if len(data.Available) > 0 {
+		data.CreateToken, err = s.issueToken("create", revision)
+		if err != nil {
+			http.Error(w, "Too many open forms. Wait ten minutes and reload.", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	renderPage(w, status, data)
 }
 
@@ -94,14 +107,14 @@ func (s *Server) projectPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderProject(w http.ResponseWriter, status, index int, alias, message string, warning bool, path *admin.PathCheckResult, access *accessdiag.Result) {
-	detail, err := s.reader.GetProject(alias)
+	var detail admin.ProjectDetail
+	revision, err := s.view(func() error {
+		var err error
+		detail, err = s.reader.GetProject(alias)
+		return err
+	})
 	if err != nil {
 		http.Error(w, "Local project cannot be read. Reload the project list.", http.StatusServiceUnavailable)
-		return
-	}
-	revision, err := s.revision()
-	if err != nil {
-		http.Error(w, "Local policy cannot be read.", http.StatusServiceUnavailable)
 		return
 	}
 	pathToken, err := s.issueTargetToken("path", revision, alias)
@@ -114,9 +127,47 @@ func (s *Server) renderProject(w http.ResponseWriter, status, index int, alias, 
 		http.Error(w, "Too many open forms. Wait ten minutes and reload.", http.StatusServiceUnavailable)
 		return
 	}
-	renderPage(w, status, pageData{Login: s.cfg.Login, ApprovalURL: s.cfg.ApprovalURL,
+	data := pageData{Login: s.cfg.Login, ApprovalURL: s.cfg.ApprovalURL,
 		Detail: &detail, Index: index, Message: message, Warning: warning, Path: path, Access: access,
-		PathToken: pathToken, AccessToken: accessToken})
+		PathToken: pathToken, AccessToken: accessToken}
+	s.mu.Lock()
+	check := s.checks[alias]
+	if check.revision == revision {
+		if s.now().Before(check.pathExpires) {
+			data.Path, data.PathMessage, data.PathWarning = check.path, check.pathMessage, check.pathWarning
+		}
+		if s.now().Before(check.accessExpires) {
+			data.Access, data.AccessMessage, data.AccessWarning = check.access, check.accessMessage, check.accessWarning
+		}
+	}
+	s.mu.Unlock()
+	for action, field := range map[string]*string{"metadata": &data.MetadataToken, "mode": &data.ModeToken, "add": &data.AddToken, "remove": &data.RemoveToken} {
+		*field, err = s.issueTargetToken(action, revision, alias)
+		if err != nil {
+			http.Error(w, "Too many open forms. Wait ten minutes and reload.", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	renderPage(w, status, data)
+}
+
+// Read the displayed values and their form revision from one unchanged policy view.
+func (s *Server) view(load func() error) (string, error) {
+	before, err := s.revision()
+	if err != nil {
+		return "", err
+	}
+	if err := load(); err != nil {
+		return "", err
+	}
+	after, err := s.revision()
+	if err != nil {
+		return "", err
+	}
+	if before != after {
+		return "", admin.ErrPolicyChanged
+	}
+	return before, nil
 }
 
 func (s *Server) projectIndex(alias string) (int, error) {
@@ -177,10 +228,12 @@ func (s *Server) checkPath(w http.ResponseWriter, r *http.Request) {
 		err = errors.Join(err, s.logger.Finish(r.Context(), id, admin.MutationFinish{Outcome: outcome}))
 	}
 	if err != nil {
-		s.renderProject(w, http.StatusServiceUnavailable, index, alias, "Path check did not complete. Check the local accounts and administrator audit with the root CLI.", true, nil, nil)
+		s.storeCheck(r, nil, nil, "Path check did not complete. Check the local accounts and administrator audit with the root CLI.", true, false)
+		s.renderProject(w, http.StatusServiceUnavailable, index, alias, "", false, nil, nil)
 		return
 	}
-	s.renderProject(w, http.StatusOK, index, alias, "Path check completed. It does not contact Bitwarden.", !result.Ready(), &result, nil)
+	s.storeCheck(r, &result, nil, "Path check completed. It does not contact Bitwarden.", !result.Ready(), false)
+	s.renderProject(w, http.StatusOK, index, alias, "", false, nil, nil)
 }
 
 func (s *Server) checkAccess(w http.ResponseWriter, r *http.Request) {
@@ -199,11 +252,13 @@ func (s *Server) checkAccess(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		s.renderProject(w, http.StatusServiceUnavailable, index, alias, "Bitwarden check did not complete. Check the worker and administrator audit with the root CLI.", true, nil, nil)
+		s.storeCheck(r, nil, nil, "Bitwarden check did not complete. Check the worker and administrator audit with the root CLI.", true, true)
+		s.renderProject(w, http.StatusServiceUnavailable, index, alias, "", false, nil, nil)
 		return
 	}
 	message := accessMessage(result.Outcome)
-	s.renderProject(w, http.StatusOK, index, alias, message, result.Outcome != accessdiag.OutcomeAllAccessible, nil, &result)
+	s.storeCheck(r, nil, &result, message, result.Outcome != accessdiag.OutcomeAllAccessible, true)
+	s.renderProject(w, http.StatusOK, index, alias, "", false, nil, nil)
 }
 
 func accessMessage(outcome accessdiag.Outcome) string {
