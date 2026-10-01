@@ -25,9 +25,11 @@ type fakeMutationEditor struct {
 	calls          int
 	alias          string
 	detail         ProjectDetail
+	pathResult     PathCheckResult
 	recoveryID     string
 	confirmation   string
 	recoveryResult RecoveryResult
+	metadataUpdate ProjectMetadataUpdate
 }
 
 func (f *fakeMutationEditor) ListProjects() ([]ProjectSummary, error) {
@@ -39,12 +41,23 @@ func (f *fakeMutationEditor) GetProject(alias string) (ProjectDetail, error) {
 	return f.detail, f.err
 }
 
+func (f *fakeMutationEditor) CheckProjectPath(_ context.Context, alias string) (PathCheckResult, error) {
+	f.alias = alias
+	return f.pathResult, f.err
+}
+
 func (f *fakeMutationEditor) ListAllowlist(string) ([][]string, error) {
 	return nil, nil
 }
 
 func (f *fakeMutationEditor) CreateProject(ProjectInput) (bool, error) {
 	f.calls++
+	return f.changed, f.err
+}
+
+func (f *fakeMutationEditor) UpdateProjectMetadata(_ string, update ProjectMetadataUpdate) (bool, error) {
+	f.calls++
+	f.metadataUpdate = update
 	return f.changed, f.err
 }
 
@@ -168,6 +181,64 @@ func TestAuditedEditorRecordsProjectCreationWithoutDeploymentIdentifiers(t *test
 	}
 	if !reflect.DeepEqual(logger.finishes, []MutationFinish{{Outcome: MutationChanged}}) {
 		t.Fatalf("finishes = %#v", logger.finishes)
+	}
+}
+
+func TestAuditedEditorRecordsOnlyRequestedMetadataFieldNames(t *testing.T) {
+	editor := &fakeMutationEditor{changed: true}
+	logger := &fakeMutationLogger{}
+	audited := NewAuditedEditor(editor, logger, 0)
+	newID := "sensitive-project-id"
+	newDir := "/sensitive/project/path"
+	update := ProjectMetadataUpdate{BWSProjectID: &newID, WorkingDir: &newDir}
+
+	changed, err := audited.UpdateProjectMetadata("alpha", update)
+	if err != nil || !changed || editor.calls != 1 {
+		t.Fatalf("changed = %v, editor calls = %d, err = %v", changed, editor.calls, err)
+	}
+	want := MutationStart{ActorUID: 0, Project: "alpha", Operation: MutationUpdateProjectMetadata, Fields: []string{"bws_project_id", "working_dir"}}
+	if !reflect.DeepEqual(logger.starts, []MutationStart{want}) {
+		t.Fatalf("starts = %#v, want %#v", logger.starts, []MutationStart{want})
+	}
+	if !reflect.DeepEqual(logger.finishes, []MutationFinish{{Outcome: MutationChanged}}) {
+		t.Fatalf("finishes = %#v", logger.finishes)
+	}
+	if editor.metadataUpdate.BWSProjectID != update.BWSProjectID || editor.metadataUpdate.WorkingDir != update.WorkingDir {
+		t.Fatal("editor did not receive requested values")
+	}
+}
+
+func TestAuditedEditorMetadataUpdateRespectsAuditFailures(t *testing.T) {
+	value := "new-entry"
+	update := ProjectMetadataUpdate{TokenEntry: &value}
+	editor := &fakeMutationEditor{changed: true}
+	logger := &fakeMutationLogger{startErr: errAuditUnavailable}
+	audited := NewAuditedEditor(editor, logger, 0)
+	if changed, err := audited.UpdateProjectMetadata("alpha", update); changed || !errors.Is(err, errAuditUnavailable) || editor.calls != 0 {
+		t.Fatalf("start failure changed = %v, calls = %d, err = %v", changed, editor.calls, err)
+	}
+	logger.startErr = nil
+	logger.finishErr = errAuditUnavailable
+	if changed, err := audited.UpdateProjectMetadata("alpha", update); !changed || !errors.Is(err, errAuditUnavailable) || !strings.Contains(err.Error(), "policy changed") {
+		t.Fatalf("finish failure changed = %v, err = %v", changed, err)
+	}
+}
+
+func TestMutationJSONLLoggerOmitsProjectMetadataValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "admin-audit", "audit.jsonl")
+	logger := NewMutationJSONLLogger(path)
+	value := "SENSITIVE_TOKEN_ENTRY_SENTINEL"
+	update := ProjectMetadataUpdate{TokenEntry: &value}
+	audited := NewAuditedEditor(&fakeMutationEditor{changed: true}, logger, 0)
+	if _, err := audited.UpdateProjectMetadata("alpha", update); err != nil {
+		t.Fatalf("UpdateProjectMetadata: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"fields":["token_entry"]`)) || bytes.Contains(data, []byte(value)) {
+		t.Fatalf("audit field privacy failure: %s", data)
 	}
 }
 
@@ -369,6 +440,9 @@ func TestAuditedEditorDoesNotAuditReadOnlyOperations(t *testing.T) {
 	}
 	if _, err := audited.ListAllowlist("project"); err != nil {
 		t.Fatalf("ListAllowlist: %v", err)
+	}
+	if _, err := audited.CheckProjectPath(context.Background(), "project"); err != nil {
+		t.Fatalf("CheckProjectPath: %v", err)
 	}
 	if _, err := audited.ListRecoveries(); err != nil {
 		t.Fatalf("ListRecoveries: %v", err)

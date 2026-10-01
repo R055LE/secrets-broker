@@ -1,7 +1,7 @@
 // Command secrets-broker-worker is the fixed, credential-bearing half of the
 // broker. Its no-argument protocol is intended to be invoked only through the
 // installed sudoers rule as the dedicated secrets-broker user. The check and
-// access-check commands are reserved for deployment administration.
+// access-check and projects-list commands are reserved for deployment administration.
 package main
 
 import (
@@ -20,6 +20,18 @@ func main() {
 }
 
 func run(args []string, server *worker.Server, in io.Reader, out, errOut io.Writer) int {
+	if len(args) == 1 && args[0] == "projects-list" {
+		result, err := server.ListProjects(context.Background())
+		if err != nil {
+			_, _ = fmt.Fprintln(errOut, "secrets-broker-worker: project list failed")
+			return 2
+		}
+		if err := json.NewEncoder(out).Encode(result); err != nil {
+			_, _ = fmt.Fprintln(errOut, "secrets-broker-worker: project list output failed")
+			return 2
+		}
+		return 0
+	}
 	if len(args) >= 1 && len(args) <= 2 && args[0] == "access-check" {
 		alias := ""
 		if len(args) == 2 {
@@ -59,6 +71,6 @@ func run(args []string, server *worker.Server, in io.Reader, out, errOut io.Writ
 			return 0
 		}
 	}
-	_, _ = fmt.Fprintln(errOut, "usage: secrets-broker-worker [check | access-check [ALIAS]]")
+	_, _ = fmt.Fprintln(errOut, "usage: secrets-broker-worker [check | access-check [ALIAS] | projects-list]")
 	return 2
 }

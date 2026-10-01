@@ -201,6 +201,11 @@ jobs:
             echo 'client sudoers rule unexpectedly allowed a worker argument' >&2
             exit 1
           fi
+          if sudo -u runner sudo -n -u secrets-broker \
+            /usr/local/libexec/secrets-broker-worker projects-list; then
+            echo 'client sudoers rule unexpectedly allowed project discovery' >&2
+            exit 1
+          fi
           access_output="$test_dir/access-output"
           # The runner shell deliberately owns the captured administrator output.
           # shellcheck disable=SC2024

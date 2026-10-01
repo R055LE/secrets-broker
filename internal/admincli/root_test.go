@@ -12,6 +12,7 @@ import (
 
 	"github.com/R055LE/secrets-broker/internal/accessdiag"
 	"github.com/R055LE/secrets-broker/internal/admin"
+	"github.com/R055LE/secrets-broker/internal/projectlist"
 )
 
 type fakeProjectEditor struct {
@@ -21,9 +22,11 @@ type fakeProjectEditor struct {
 	alias          string
 	mode           string
 	detail         admin.ProjectDetail
+	pathResult     admin.PathCheckResult
 	allow          [][]string
 	argv           []string
 	input          admin.ProjectInput
+	metadataUpdate admin.ProjectMetadataUpdate
 	recoveryResult admin.RecoveryResult
 	recoveries     []admin.RecoverySummary
 	recoveryID     string
@@ -32,9 +35,31 @@ type fakeProjectEditor struct {
 }
 
 type fakeAccessChecker struct {
-	result  accessdiag.Result
-	err     error
-	aliases []string
+	result    accessdiag.Result
+	available projectlist.Result
+	err       error
+	aliases   []string
+}
+
+func (c *fakeAccessChecker) ListAvailable(_ context.Context, consume func(projectlist.Result) error) error {
+	if c.err != nil {
+		return c.err
+	}
+	return consume(c.available)
+}
+
+func TestAvailableProjectsShowsNamesAndIDs(t *testing.T) {
+	checker := &fakeAccessChecker{available: projectlist.Result{
+		Version:  projectlist.Version,
+		Projects: []projectlist.Project{{ID: "project-id", Name: "Example"}},
+	}}
+	var stdout, stderr bytes.Buffer
+	code := executeWithAccess(func() int { return 0 }, &fakeProjectEditor{}, checker,
+		[]string{"projects", "available"}, &stdout, &stderr)
+	if code != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "project-id") ||
+		!strings.Contains(stdout.String(), "Example") {
+		t.Fatalf("code = %d, stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
+	}
 }
 
 func (c *fakeAccessChecker) Run(
@@ -76,10 +101,23 @@ func (f *fakeProjectEditor) CreateProject(input admin.ProjectInput) (bool, error
 	return f.changed, f.err
 }
 
+func (f *fakeProjectEditor) UpdateProjectMetadata(alias string, input admin.ProjectMetadataUpdate) (bool, error) {
+	f.calls++
+	f.alias = alias
+	f.metadataUpdate = input
+	return f.changed, f.err
+}
+
 func (f *fakeProjectEditor) GetProject(alias string) (admin.ProjectDetail, error) {
 	f.calls++
 	f.alias = alias
 	return f.detail, f.err
+}
+
+func (f *fakeProjectEditor) CheckProjectPath(_ context.Context, alias string) (admin.PathCheckResult, error) {
+	f.calls++
+	f.alias = alias
+	return f.pathResult, f.err
 }
 
 func (f *fakeProjectEditor) ListAllowlist(alias string) ([][]string, error) {
@@ -283,6 +321,38 @@ func TestProjectsAccessCheckReturnsTwoForLocalOrOutputFailure(t *testing.T) {
 	})
 }
 
+func TestProjectsPathCheckReportsSeparateAccessAndAdvisoryWrite(t *testing.T) {
+	editor := &fakeProjectEditor{pathResult: admin.PathCheckResult{
+		Alias: "alpha", ConfiguredPath: "/srv/project", ResolvedPath: "/srv/project",
+		Resolution: admin.PathResolved, WorkerCanEnter: true, RunnerCanEnter: true,
+	}}
+	var stdout, stderr bytes.Buffer
+	if code := execute(func() int { return 0 }, editor, []string{"projects", "path", "check", "alpha"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if editor.alias != "alpha" || editor.calls != 1 {
+		t.Fatalf("path checker called with %q, calls = %d", editor.alias, editor.calls)
+	}
+	for _, want := range []string{"resolved to", "Worker: can enter", "Runner: can enter", "Runner write: cannot write (advisory)"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("output = %q, missing %q", stdout.String(), want)
+		}
+	}
+}
+
+func TestProjectsPathCheckReportsMissingWithoutIdentityProbe(t *testing.T) {
+	editor := &fakeProjectEditor{pathResult: admin.PathCheckResult{
+		Alias: "alpha", ConfiguredPath: "/srv/missing", Resolution: admin.PathMissing,
+	}}
+	var stdout, stderr bytes.Buffer
+	if code := execute(func() int { return 0 }, editor, []string{"projects", "path", "check", "alpha"}, &stdout, &stderr); code != 1 {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "missing") || !strings.Contains(stdout.String(), "not checked") {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
 func TestProjectsSetApproval(t *testing.T) {
 	editor := &fakeProjectEditor{changed: true}
 	var stdout, stderr bytes.Buffer
@@ -322,6 +392,56 @@ func TestProjectsCreateRequiresExplicitInputsAndUsesSafeDefaults(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `created in confirm mode with an empty allowlist`) {
 		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestProjectsUpdatePassesOnlySpecifiedFields(t *testing.T) {
+	editor := &fakeProjectEditor{changed: true}
+	var stdout, stderr bytes.Buffer
+	args := []string{"projects", "update", "alpha", "--bws-project-id", "new-id", "--working-dir", "/srv/alpha"}
+	if code := execute(func() int { return 0 }, editor, args, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if editor.alias != "alpha" || editor.metadataUpdate.BWSProjectID == nil || *editor.metadataUpdate.BWSProjectID != "new-id" || editor.metadataUpdate.TokenEntry != nil || editor.metadataUpdate.WorkingDir == nil || *editor.metadataUpdate.WorkingDir != "/srv/alpha" {
+		t.Fatalf("UpdateProjectMetadata called with alias %q and input %#v", editor.alias, editor.metadataUpdate)
+	}
+	if !strings.Contains(stdout.String(), "updated") || strings.Contains(stdout.String(), "new-id") {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestProjectsUpdateRequiresFieldAndReportsNoOp(t *testing.T) {
+	editor := &fakeProjectEditor{}
+	var stdout, stderr bytes.Buffer
+	if code := execute(func() int { return 0 }, editor, []string{"projects", "update", "alpha"}, &stdout, &stderr); code == 0 || editor.calls != 0 {
+		t.Fatalf("missing-field exit code = %d, editor calls = %d", code, editor.calls)
+	}
+	if !strings.Contains(stderr.String(), "at least one") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := execute(func() int { return 0 }, editor, []string{"projects", "update", "alpha", "--token-entry", "existing"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("no-op exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "already has the requested metadata") {
+		t.Fatalf("unexpected no-op output: %q", stdout.String())
+	}
+}
+
+func TestProjectsUpdateHelpExplainsLocalEffectAndAccessRecheck(t *testing.T) {
+	root := newRootCommand(func() int { return 0 }, &fakeProjectEditor{}, &bytes.Buffer{})
+	update, _, err := root.Find([]string{"projects", "update"})
+	if err != nil {
+		t.Fatalf("finding update command: %v", err)
+	}
+	for _, phrase := range []string{"local broker policy", "projects access check"} {
+		if !strings.Contains(update.Long, phrase) {
+			t.Fatalf("update help must mention %q, got %q", phrase, update.Long)
+		}
+	}
+	if update.Flags().Lookup("alias") != nil || update.Flags().Lookup("policy") != nil {
+		t.Fatal("update exposes alias rename or policy override")
 	}
 }
 
@@ -543,6 +663,8 @@ func TestAdminCommandsRequireRoot(t *testing.T) {
 	for _, args := range [][]string{
 		{"projects", "list"},
 		{"projects", "show", "project"},
+		{"projects", "path", "check", "project"},
+		{"projects", "update", "project", "--token-entry", "entry"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			editor := &fakeProjectEditor{}

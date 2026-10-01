@@ -13,6 +13,7 @@ import (
 	"github.com/R055LE/secrets-broker/internal/accessdiag"
 	"github.com/R055LE/secrets-broker/internal/admin"
 	"github.com/R055LE/secrets-broker/internal/execx"
+	"github.com/R055LE/secrets-broker/internal/projectlist"
 	"github.com/spf13/cobra"
 )
 
@@ -25,8 +26,10 @@ const (
 type projectEditor interface {
 	ListProjects() ([]admin.ProjectSummary, error)
 	GetProject(alias string) (admin.ProjectDetail, error)
+	CheckProjectPath(ctx context.Context, alias string) (admin.PathCheckResult, error)
 	ListAllowlist(alias string) ([][]string, error)
 	CreateProject(input admin.ProjectInput) (bool, error)
+	UpdateProjectMetadata(alias string, input admin.ProjectMetadataUpdate) (bool, error)
 	SetApproval(alias, mode string) (bool, error)
 	AddAllowlist(alias string, argv []string) (bool, error)
 	RemoveAllowlist(alias string, argv []string) (bool, error)
@@ -184,6 +187,44 @@ func newRootCommandWithAccess(
 	create.Flags().StringVar(&createTokenEntry, "token-entry", "", "Bitwarden Secrets Manager access-token secret name; meaning depends on the resolver backend, advisory only under env/file (ignored at runtime)")
 	create.Flags().StringVar(&createWorkingDir, "working-dir", "", "absolute allowed working directory; the command starts here as secrets-broker-runner, which does not grant write access, so output files need a path that user can write")
 	projects.AddCommand(create)
+	var updateBWSProjectID string
+	var updateTokenEntry string
+	var updateWorkingDir string
+	update := &cobra.Command{
+		Use:   "update ALIAS",
+		Short: "Update a project's local broker metadata",
+		Long:  "Update only the selected fields in local broker policy. This does not change a Bitwarden project, grant, token, or secret. After changing a BWS project ID, run 'secrets-broker-admin projects access check ALIAS' to recheck access.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			input := admin.ProjectMetadataUpdate{}
+			if cmd.Flags().Changed("bws-project-id") {
+				input.BWSProjectID = &updateBWSProjectID
+			}
+			if cmd.Flags().Changed("token-entry") {
+				input.TokenEntry = &updateTokenEntry
+			}
+			if cmd.Flags().Changed("working-dir") {
+				input.WorkingDir = &updateWorkingDir
+			}
+			if input.BWSProjectID == nil && input.TokenEntry == nil && input.WorkingDir == nil {
+				return fmt.Errorf("at least one metadata field is required")
+			}
+			changed, err := editor.UpdateProjectMetadata(args[0], input)
+			if err != nil {
+				return err
+			}
+			if changed {
+				_, _ = fmt.Fprintf(stdout, "Project %q metadata updated.\n", args[0])
+			} else {
+				_, _ = fmt.Fprintf(stdout, "Project %q already has the requested metadata.\n", args[0])
+			}
+			return nil
+		},
+	}
+	update.Flags().StringVar(&updateBWSProjectID, "bws-project-id", "", "Bitwarden Secrets Manager project ID; update local broker policy only")
+	update.Flags().StringVar(&updateTokenEntry, "token-entry", "", "Bitwarden Secrets Manager access-token secret name; meaning depends on the resolver backend, advisory only under env/file (ignored at runtime)")
+	update.Flags().StringVar(&updateWorkingDir, "working-dir", "", "absolute allowed working directory; the command starts here as secrets-broker-runner, which does not grant write access")
+	projects.AddCommand(update)
 	var removeConfirmation string
 	remove := &cobra.Command{
 		Use:   "remove ALIAS --confirm ALIAS",
@@ -248,6 +289,82 @@ func newRootCommandWithAccess(
 		},
 	})
 	projects.AddCommand(access)
+	projects.AddCommand(&cobra.Command{
+		Use:   "available",
+		Short: "List Bitwarden projects visible to the deployed worker",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return diagnostic.ListAvailable(cmd.Context(), func(result projectlist.Result) error {
+				writer := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+				if _, err := fmt.Fprintln(writer, "BWS_PROJECT_ID\tNAME"); err != nil {
+					return fmt.Errorf("writing available projects: %w", err)
+				}
+				for _, project := range result.Projects {
+					if _, err := fmt.Fprintf(writer, "%s\t%s\n", project.ID, project.Name); err != nil {
+						return fmt.Errorf("writing available projects: %w", err)
+					}
+				}
+				if err := writer.Flush(); err != nil {
+					return fmt.Errorf("writing available projects: %w", err)
+				}
+				return nil
+			})
+		},
+	})
+	path := &cobra.Command{
+		Use:   "path",
+		Short: "Check configured project directory readiness offline",
+		Long:  "Check path resolution and access as the deployed worker and runner. Runner write access is advisory. The check does not create a file, read the BWS token, contact Bitwarden or the approval relay, or run an allowlisted command.",
+	}
+	path.AddCommand(&cobra.Command{
+		Use:   "check ALIAS",
+		Short: "Check path resolution and worker and runner access without BWS or approval",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := editor.CheckProjectPath(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			resolution := "could not resolve"
+			worker, runner, write := "not checked", "not checked", "not checked"
+			switch result.Resolution {
+			case admin.PathResolved:
+				resolution = fmt.Sprintf("resolved to %q", result.ResolvedPath)
+				worker = "cannot enter"
+				if result.WorkerCanEnter {
+					worker = "can enter"
+				}
+				runner = "cannot enter"
+				if result.RunnerCanEnter {
+					runner = "can enter"
+				}
+				write = "cannot write (advisory)"
+				if result.RunnerCanWrite {
+					write = "can write (advisory)"
+				}
+			case admin.PathMissing:
+				resolution = "missing or dangling symlink"
+			case admin.PathNotDirectory:
+				resolution = "not a directory"
+			case admin.PathUnresolvable:
+				// The default message is intentionally free of raw filesystem errors.
+			default:
+				return fmt.Errorf("path diagnostic returned an invalid result")
+			}
+			if _, err := fmt.Fprintf(
+				stdout,
+				"Project: %q\nConfigured path: %q\nPath: %s\nWorker: %s\nRunner: %s\nRunner write: %s\n",
+				result.Alias, result.ConfiguredPath, resolution, worker, runner, write,
+			); err != nil {
+				return fmt.Errorf("writing path diagnostic: %w", err)
+			}
+			if !result.Ready() {
+				onDiagnosticFailure()
+			}
+			return nil
+		},
+	})
+	projects.AddCommand(path)
 
 	recovery := &cobra.Command{
 		Use:   "recovery",
@@ -399,6 +516,10 @@ func (unavailableAccessDiagnostic) Run(
 	func(accessdiag.Result) error,
 ) (accessdiag.Outcome, error) {
 	return "", fmt.Errorf("access diagnostic unavailable")
+}
+
+func (unavailableAccessDiagnostic) ListAvailable(context.Context, func(projectlist.Result) error) error {
+	return fmt.Errorf("project list diagnostic unavailable")
 }
 
 func recoveryMutationError(err error, result admin.RecoveryResult) error {

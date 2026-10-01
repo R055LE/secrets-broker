@@ -13,6 +13,7 @@ import (
 
 	"github.com/R055LE/secrets-broker/internal/accessdiag"
 	"github.com/R055LE/secrets-broker/internal/execx"
+	"github.com/R055LE/secrets-broker/internal/projectlist"
 	"github.com/R055LE/secrets-broker/internal/token"
 )
 
@@ -85,6 +86,46 @@ approval = "never"
 `)
 	if err != nil {
 		t.Fatalf("appending config: %v", err)
+	}
+}
+
+func TestListProjectsUsesWorkerTokenAndReturnsOnlyNamesAndIDs(t *testing.T) {
+	workingDir := t.TempDir()
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("test-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath, bwsPath := writeWorkerConfig(t, workingDir, tokenPath)
+	runner := &accessRunner{responses: []accessResponse{{
+		exitCode: 0,
+		stdout: `[{
+			"object":"project", "id":"project-id", "name":"Example",
+			"organizationId":"organization-id", "futureSensitiveField":"sentinel-secret"
+		}]`,
+	}}}
+	resolver := &recordingResolver{token: token.New("test-token")}
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	server := &Server{
+		ConfigPath: configPath, AuditLogPath: auditPath, ExecRunner: runner,
+		newTokenResolver: func(string) token.Resolver { return resolver },
+	}
+	got, err := server.ListProjects(context.Background())
+	if err != nil || !reflect.DeepEqual(got, projectlist.Result{
+		Version:  projectlist.Version,
+		Projects: []projectlist.Project{{ID: "project-id", Name: "Example"}},
+	}) {
+		t.Fatalf("ListProjects() = %#v, %v", got, err)
+	}
+	if len(runner.calls) != 1 || runner.calls[0].Name != bwsPath ||
+		!reflect.DeepEqual(runner.calls[0].Args, []string{"project", "list", "--output", "json", "--color", "no"}) ||
+		runner.calls[0].Dir == workingDir {
+		t.Fatalf("unexpected BWS invocation: %#v", runner.calls)
+	}
+	if !reflect.DeepEqual(resolver.entries, []string{""}) {
+		t.Fatalf("token resolution entries = %#v", resolver.entries)
+	}
+	if _, err := os.Stat(auditPath); !os.IsNotExist(err) {
+		t.Fatalf("worker created audit log: %v", err)
 	}
 }
 
