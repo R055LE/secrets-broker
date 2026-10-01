@@ -64,7 +64,7 @@ func TestHomeEscapesIdentityAndHasSafeHeaders(t *testing.T) {
 	}
 	for name, value := range map[string]string{
 		"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
-		"Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
+		"Referrer-Policy": "same-origin", "X-Frame-Options": "DENY",
 	} {
 		if w.Header().Get(name) != value {
 			t.Fatalf("missing header %s", name)
@@ -101,6 +101,7 @@ func TestPostRejectsOriginContentTypeTokensAndOversize(t *testing.T) {
 	for name, change := range map[string]func(*http.Request){
 		"missing origin":   func(r *http.Request) { r.Header.Del("Origin") },
 		"cross origin":     func(r *http.Request) { r.Header.Set("Origin", "https://other.example.ts.net") },
+		"null origin":      func(r *http.Request) { r.Header.Set("Origin", "null") },
 		"duplicate origin": func(r *http.Request) { r.Header.Add("Origin", "https://"+testConfig.Host) },
 		"json":             func(r *http.Request) { r.Header.Set("Content-Type", "application/json") },
 		"query token":      func(r *http.Request) { r.URL.RawQuery = "csrf=token" },

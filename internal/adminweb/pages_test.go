@@ -210,3 +210,26 @@ func TestDiscoveryRejectsUnboundedResult(t *testing.T) {
 		t.Fatal("oversized discovery accepted")
 	}
 }
+
+func TestReadinessChecksPersistIndependentlyAndExpire(t *testing.T) {
+	s, reader, checker, _ := pageHarness()
+	now := time.Now()
+	s.now = func() time.Time { return now }
+	reader.path.Resolution = admin.PathMissing
+	response(s, formRequest(t, s, "path", reader.detail.Alias))
+	now = now.Add(9 * time.Minute)
+	checker.access = accessdiag.Result{Version: 1, Outcome: accessdiag.OutcomeInaccessible, Projects: []accessdiag.ProjectResult{{Alias: reader.detail.Alias, BWSProjectID: "project-id", Status: accessdiag.StatusInaccessible}}}
+	w := response(s, formRequest(t, s, "access", reader.detail.Alias))
+	if !strings.Contains(w.Body.String(), "Path resolution") || !strings.Contains(w.Body.String(), "Review the machine account") {
+		t.Fatal("second check hid the first failure")
+	}
+	now = now.Add(2 * time.Minute)
+	w = response(s, request("GET", "/projects/0", ""))
+	if strings.Contains(w.Body.String(), "Path resolution") || !strings.Contains(w.Body.String(), "Review the machine account") || checker.calls != 1 || reader.pathCalls != 1 {
+		t.Fatal("checks did not expire independently or GET repeated them")
+	}
+	s.revision = func() (string, error) { return "new", nil }
+	if w := response(s, request("GET", "/projects/0", "")); strings.Contains(w.Body.String(), "Review the machine account") {
+		t.Fatal("old-policy result remained")
+	}
+}
