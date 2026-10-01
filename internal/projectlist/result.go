@@ -22,17 +22,20 @@ type Result struct {
 
 func FromBWS(data []byte) (Result, error) {
 	var source []struct {
-		Object string `json:"object"`
-		ID     string `json:"id"`
-		Name   string `json:"name"`
+		Object json.RawMessage `json:"object"`
+		ID     string          `json:"id"`
+		Name   string          `json:"name"`
 	}
 	if err := json.Unmarshal(data, &source); err != nil || source == nil {
 		return Result{}, fmt.Errorf("invalid BWS project list")
 	}
 	result := Result{Version: Version, Projects: make([]Project, 0, len(source))}
 	for _, item := range source {
-		if item.Object != "project" {
-			return Result{}, fmt.Errorf("invalid BWS project list")
+		if len(item.Object) != 0 {
+			var object string
+			if err := json.Unmarshal(item.Object, &object); err != nil || object != "project" {
+				return Result{}, fmt.Errorf("invalid BWS project list")
+			}
 		}
 		result.Projects = append(result.Projects, Project{ID: item.ID, Name: item.Name})
 	}
