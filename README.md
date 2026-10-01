@@ -77,7 +77,7 @@ task build:relay
 The local lint task expects `golangci-lint` on `PATH`. CI pins its own version.
 
 Tagged releases contain versioned Linux archives for amd64 and arm64. Each archive keeps the
-repository layout needed by the installers: the four binaries under `bin/`, deployment files
+repository layout needed by the installers: role binaries under `bin/`, deployment files
 under `deploy/`, and the example policy at the archive root. Use a current GitHub CLI with
 `gh attestation verify`; older distro packages may not include that command. Verify the archive's
 checksum and GitHub build provenance before extracting it and running the installer from inside
