@@ -141,6 +141,7 @@ jobs:
           printf '%s\n' \
             '#!/bin/sh' \
             'test "$1" = --version && { echo "bws 0.0.0-ci"; exit 0; }' \
+            'test "$*" = "project list --output json --color no" && { echo '\''[{"object":"project","id":"00000000-0000-0000-0000-000000000000","name":"Example CI project"}]'\''; exit 0; }' \
             'test "$#" = 7 || exit 2' \
             'test "$1" = project || exit 2' \
             'test "$2" = get || exit 2' \
@@ -366,8 +367,9 @@ jobs:
       - name: Install and check opt-in administrator socket
         run: |
           test ! -e /usr/bin/tailscale
+          test ! -e /usr/sbin/tailscaled
           test_dir="$(mktemp -d)"
-          trap 'sudo systemctl stop secrets-broker-admin-web.socket secrets-broker-admin-web.service || true; rm -rf "$test_dir"' EXIT
+          trap 'sudo systemctl stop secrets-broker-admin-web.socket secrets-broker-admin-web.service || true; sudo rm -f /usr/sbin/tailscaled; rm -rf "$test_dir"' EXIT
           tar -xzf dist/secrets-broker-v0.0.0-ci-linux-amd64.tar.gz -C "$test_dir"
           release_root="$test_dir/secrets-broker-v0.0.0-ci-linux-amd64"
           # shellcheck disable=SC2016 # These parameters belong to the generated mock.
@@ -408,6 +410,13 @@ jobs:
             echo 'administrator process opened a TCP listener' >&2
             exit 1
           fi
+          go build -o "$test_dir/tailscaled" ./internal/adminweb/testdata/tailscaled
+          sudo install -o root -g root -m 0700 "$test_dir/tailscaled" /usr/sbin/tailscaled
+          sudo /usr/sbin/tailscaled
+          sudo /usr/local/sbin/secrets-broker-admin projects show web-ci-project | grep -Fq web-ci-updated
+          test "$(sudo /usr/local/sbin/secrets-broker-admin projects allowlist list web-ci-project | wc -l)" = 1
+          sudo /usr/local/sbin/secrets-broker-admin projects remove web-ci-project --confirm web-ci-project
+          sudo grep -Fq '"actor_login":"operator@example.invalid"' /var/log/secrets-broker-admin/audit.jsonl
           sudo /bin/sh -c 'printf "\\n# preserved web config\\n" >> /etc/secrets-broker-admin/web.toml'
           config_before="$(sudo sha256sum /etc/secrets-broker-admin/web.toml)"
           sudo "$release_root/deploy/install-admin-web.sh" install --config "$test_dir/web.toml"
