@@ -62,11 +62,13 @@ this route and receives no socket access.
   state at 128 entries. Set finite read, write, idle, and operation timeouts. Reject unsupported
   methods and content types. A service crash or timeout must not perform an unaudited policy write.
   Service failure leaves the administrator CLI and worker available.
-- Send `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
+- Send `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`,
   `X-Frame-Options: DENY`, and a restrictive Content Security Policy with no inline script and
   `frame-ancestors 'none'`. Never put tokens or policy details in URLs. Show sanitized outcomes;
   the first release omits credentials, secret names and values, raw BWS output, and recovery artifact
   contents. A later human-only secret-entry surface needs its own reviewed boundary.
+  `same-origin` preserves the form Origin check; `no-referrer` makes browser form POSTs send
+  `Origin: null`. External requests receive no Referer. This matches the existing relay behavior.
 - For each audited web operation, add the authenticated Tailscale login as actor attribution to the
   existing start and finish record without replacing the effective UID. Keep the existing correlation ID and fail-closed
   start. If the finish record fails after a policy change, report that the change may have committed
