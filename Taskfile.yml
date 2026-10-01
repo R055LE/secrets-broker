@@ -34,6 +34,11 @@ tasks:
     cmds:
       - go build -ldflags="-s -w" -o bin/secrets-broker-admin ./cmd/secrets-broker-admin
 
+  build:admin-web:
+    desc: Build the opt-in root-only Unix-socket administrator service
+    cmds:
+      - go build -ldflags="-s -w" -o bin/secrets-broker-admin-web ./cmd/secrets-broker-admin-web
+
   test:
     desc: Run the hermetic unit test suite (no KWallet/kdialog/bws required)
     env:
@@ -65,7 +70,7 @@ tasks:
   check:installers:
     desc: Check release and deployment script syntax
     cmds:
-      - bash -n scripts/package-release.sh deploy/install-worker.sh deploy/install-relay.sh deploy/upgrade-release.sh
+      - bash -n scripts/package-release.sh deploy/install-worker.sh deploy/install-relay.sh deploy/install-admin-web.sh deploy/upgrade-release.sh
 
   fmt:
     desc: Format all Go files

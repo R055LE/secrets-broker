@@ -320,6 +320,35 @@ records can place them in adjacent files; the shared ID still correlates the pai
 threshold is evaluated when the host's logrotate schedule runs, so it is not a real-time disk
 quota.
 
+### Optional administrator web socket
+
+The first web service slice provides a verified administrator connection page. Project pages and
+editing forms follow separately. From a source checkout, build it with `task build:admin-web` and
+prepare a trusted TOML file containing the exact private hostname and personal Tailscale login:
+
+```toml
+host = "broker.example.ts.net"
+login = "operator@example.invalid"
+```
+
+After approving installation on the broker host:
+
+```bash
+sudo deploy/install-admin-web.sh install --config /path/to/web.toml
+sudo tailscale serve --bg unix:/run/secrets-broker-admin.sock
+sudo deploy/install-admin-web.sh check
+```
+
+The installer preserves existing configuration and enables the root:root `0600` Unix socket. It
+rejects a local Tailscale operator, conflicting Serve/Funnel routes, and unsafe socket permissions.
+Serve and tailnet ACL setup are explicit host operations. Verify the phone identity and agent denial
+before using the private HTTPS URL. Web operations carry the authenticated login into both admin
+audit records while preserving the root UID. The boundary and live prerequisite are recorded in
+[PR #70](https://github.com/R055LE/secrets-broker/pull/70).
+
+To revoke browser access, remove its tailnet grant or run `sudo tailscale serve reset`, then restart
+`secrets-broker-admin-web.socket` and `secrets-broker-admin-web.service` to close existing connections.
+
 Install the relay on a separate Tailscale device. Start from the example and replace both values
 with that device's literal Tailscale IPv4 address:
 
