@@ -24,6 +24,8 @@ and check phase.
 
 This command upgrades an existing deployment. It does not perform first-time
 policy, token, relay-address, or Tailscale ACL setup.
+Worker upgrades also update an administrator web socket that is already
+enabled. An absent or disabled web role stays unchanged.
 EOF
 }
 
@@ -74,6 +76,7 @@ perform_verified_install() {
   local copied_digest
   local bundle_dir
   local installer
+  local upgrade_web=false
 
   [[ "$install_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] ||
     fail "invalid privileged release version"
@@ -134,8 +137,25 @@ perform_verified_install() {
       require_regular_file "$installer" "worker installer"
       [[ -x "$installer" ]] || fail "worker installer is not executable"
 
+      if [[ -e /etc/systemd/system/secrets-broker-admin-web.socket || -L /etc/systemd/system/secrets-broker-admin-web.socket ]]; then
+        require_regular_file /etc/systemd/system/secrets-broker-admin-web.socket "installed administrator socket unit"
+        require_command systemctl
+        if [[ "$(systemctl is-enabled secrets-broker-admin-web.socket 2>/dev/null || true)" == enabled ]]; then
+          require_regular_file "$bundle_dir/bin/secrets-broker-admin-web" "administrator web binary"
+          require_regular_file "$bundle_dir/deploy/install-admin-web.sh" "administrator web installer"
+          "$bundle_dir/bin/secrets-broker-admin-web" check
+          upgrade_web=true
+        fi
+      fi
+
       "$installer" install --client-user "$install_client_user"
       "$installer" check --client-user "$install_client_user"
+
+      if [[ "$upgrade_web" == true ]]; then
+        "$bundle_dir/deploy/install-admin-web.sh" install
+        cmp -s "$bundle_dir/bin/secrets-broker-admin-web" /usr/local/libexec/secrets-broker-admin-web ||
+          fail "installed administrator web binary does not match the verified release"
+      fi
 
       cmp -s "$bundle_dir/bin/secrets-broker" /usr/local/bin/secrets-broker ||
         fail "installed CLI does not match the verified release"
