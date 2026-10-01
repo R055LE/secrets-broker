@@ -203,12 +203,17 @@ jobs:
           test "$(sudo grep -Fc '"operation":"create_project"' /var/log/secrets-broker-admin/audit.jsonl)" = 2
           sudo grep -Fq '"outcome":"failed"' /var/log/secrets-broker-admin/audit.jsonl
 
-          if sudo -u runner sudo -n -u secrets-broker \
+          # GitHub's runner has broad sudo rights; use a client with only our group rule.
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin \
+            --groups secrets-broker-clients secrets-broker-ci-client
+          sudo -u secrets-broker-ci-client sudo -n -l -u secrets-broker \
+            /usr/local/libexec/secrets-broker-worker
+          if sudo -u secrets-broker-ci-client sudo -n -l -u secrets-broker \
             /usr/local/libexec/secrets-broker-worker access-check; then
             echo 'client sudoers rule unexpectedly allowed a worker argument' >&2
             exit 1
           fi
-          if sudo -u runner sudo -n -u secrets-broker \
+          if sudo -u secrets-broker-ci-client sudo -n -l -u secrets-broker \
             /usr/local/libexec/secrets-broker-worker projects-list; then
             echo 'client sudoers rule unexpectedly allowed project discovery' >&2
             exit 1
@@ -394,7 +399,7 @@ jobs:
           sudo "$release_root/deploy/install-admin-web.sh" install --config "$test_dir/web.toml"
           sudo "$release_root/deploy/install-admin-web.sh" check
           test "$(sudo stat -c '%u:%g:%a' /run/secrets-broker-admin.sock)" = 0:0:600
-          if sudo -u runner curl --silent --max-time 5 --unix-socket /run/secrets-broker-admin.sock http://localhost/; then
+          if sudo -u secrets-broker-ci-client curl --silent --max-time 5 --unix-socket /run/secrets-broker-admin.sock http://localhost/; then
             echo 'agent reached administrator socket' >&2
             exit 1
           fi
