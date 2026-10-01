@@ -29,11 +29,13 @@ func request(path string, form url.Values, login string) (string, int, error) {
 	if form != nil {
 		method, body = http.MethodPost, strings.NewReader(form.Encode())
 	}
-	req, err := http.NewRequest(method, "http://broker.example.ts.net"+path, body)
+	req, err := http.NewRequest(method, "http://localhost"+path, body)
 	if err != nil {
 		return "", 0, err
 	}
 	req.Header.Set("Tailscale-User-Login", login)
+	req.Header.Set("X-Forwarded-Host", "broker.example.ts.net")
+	req.Header.Set("X-Forwarded-Proto", "https")
 	req.Header.Set("Origin", "https://broker.example.ts.net")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	res, err := client.Do(req)
