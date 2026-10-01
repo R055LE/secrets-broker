@@ -415,6 +415,18 @@ jobs:
             echo 'administrator process opened a TCP listener' >&2
             exit 1
           fi
+          sudo install -d -m 0755 /etc/systemd/system/secrets-broker-admin-web.service.d
+          printf '%s\n' '[Service]' \
+            'ExecStartPost=/usr/sbin/runuser -u secrets-broker -- /usr/local/libexec/secrets-broker-worker projects-list' \
+            > "$test_dir/worker-probe.conf"
+          sudo install -o root -g root -m 0644 "$test_dir/worker-probe.conf" \
+            /etc/systemd/system/secrets-broker-admin-web.service.d/worker-probe.conf
+          sudo systemctl daemon-reload
+          if ! sudo systemctl restart secrets-broker-admin-web.service; then
+            sudo journalctl --unit secrets-broker-admin-web.service --no-pager -n 25
+            exit 1
+          fi
+          sudo journalctl --unit secrets-broker-admin-web.service --no-pager -n 25
           go build -o "$test_dir/tailscaled" ./internal/adminweb/testdata/tailscaled
           sudo install -o root -g root -m 0700 "$test_dir/tailscaled" /usr/sbin/tailscaled
           sudo /usr/sbin/tailscaled
