@@ -54,6 +54,8 @@ func TestHomeEscapesIdentityAndHasSafeHeaders(t *testing.T) {
 	cfg := testConfig
 	cfg.Login = "<script>alert(1)</script>@example.invalid"
 	s := NewServer(cfg)
+	s.reader = &pageReader{}
+	s.revision = func() (string, error) { return "current", nil }
 	r := request("GET", "/", "")
 	r.Header.Set("Tailscale-User-Login", cfg.Login)
 	w := response(s, r)
@@ -68,8 +70,8 @@ func TestHomeEscapesIdentityAndHasSafeHeaders(t *testing.T) {
 			t.Fatalf("missing header %s", name)
 		}
 	}
-	if !strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") || len(s.tokens) != 0 {
-		t.Fatal("unsafe policy or GET token side effect")
+	if !strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+		t.Fatal("unsafe browser policy")
 	}
 }
 

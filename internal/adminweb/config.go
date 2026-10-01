@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"reflect"
 	"regexp"
 	"strings"
@@ -25,8 +26,9 @@ const (
 )
 
 type Config struct {
-	Host  string `toml:"host"`
-	Login string `toml:"login"`
+	Host        string `toml:"host"`
+	Login       string `toml:"login"`
+	ApprovalURL string `toml:"approval_url"`
 }
 
 var hostPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.ts\.net$`)
@@ -49,6 +51,14 @@ func ParseConfig(data []byte) (Config, error) {
 	for _, char := range cfg.Login {
 		if char < 33 || char > 126 || char == ',' {
 			return Config{}, errors.New("login contains unsupported characters")
+		}
+	}
+	if cfg.ApprovalURL != "" {
+		link, err := url.Parse(cfg.ApprovalURL)
+		if err != nil || link.Scheme != "http" || !hostPattern.MatchString(link.Hostname()) ||
+			link.Port() != "7621" || link.User != nil || link.RawQuery != "" || link.Fragment != "" ||
+			(link.Path != "" && link.Path != "/") {
+			return Config{}, errors.New("approval_url must be the separate relay's private HTTP Tailscale URL on port 7621")
 		}
 	}
 	return cfg, nil
