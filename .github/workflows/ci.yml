@@ -50,6 +50,7 @@ jobs:
         run: |
           go build -ldflags="-s -w" -o bin/secrets-broker ./cmd/secrets-broker
           go build -ldflags="-s -w" -o bin/secrets-broker-admin ./cmd/secrets-broker-admin
+          go build -ldflags="-s -w" -o bin/secrets-broker-admin-web ./cmd/secrets-broker-admin-web
           go build -ldflags="-s -w" -o bin/secrets-broker-worker ./cmd/secrets-broker-worker
           go build -ldflags="-s -w" -o bin/secrets-broker-relay ./cmd/secrets-broker-relay
 
@@ -111,12 +112,14 @@ jobs:
             scripts/testdata/fake-gh \
             deploy/install-worker.sh \
             deploy/install-relay.sh \
+            deploy/install-admin-web.sh \
             deploy/upgrade-release.sh
           shellcheck \
             scripts/package-release.sh \
             scripts/testdata/fake-gh \
             deploy/install-worker.sh \
             deploy/install-relay.sh \
+            deploy/install-admin-web.sh \
             deploy/upgrade-release.sh
           deploy/upgrade-release.sh --help >/dev/null
           if deploy/upgrade-release.sh worker latest; then
@@ -356,6 +359,60 @@ jobs:
           sudo -u runner test ! -r "$recovery_artifact"
           sudo -u secrets-broker test ! -r "$recovery_artifact"
           sudo -u secrets-broker-runner test ! -r "$recovery_artifact"
+
+      - name: Install and check opt-in administrator socket
+        run: |
+          test ! -e /usr/bin/tailscale
+          test_dir="$(mktemp -d)"
+          trap 'sudo systemctl stop secrets-broker-admin-web.socket secrets-broker-admin-web.service || true; sudo rm -f /usr/bin/tailscale /run/secrets-broker-test-operator /run/secrets-broker-test-tailscale.log; rm -rf "$test_dir"' EXIT
+          go build -o bin/secrets-broker-admin-web ./cmd/secrets-broker-admin-web
+          # shellcheck disable=SC2016 # These parameters belong to the generated mock.
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'printf "%s\\n" "$*" >> /run/secrets-broker-test-tailscale.log' \
+            'case "$*" in' \
+            '  "get operator") test ! -e /run/secrets-broker-test-operator || echo agent ;;' \
+            '  "serve status --json") echo "{}" ;;' \
+            '  *) exit 1 ;;' \
+            'esac' > "$test_dir/tailscale"
+          sudo install -o root -g root -m 0755 "$test_dir/tailscale" /usr/bin/tailscale
+          printf '%s\n' "host = 'broker.example.ts.net'" "login = 'operator@example.invalid'" > "$test_dir/web.toml"
+          sudo touch /run/secrets-broker-test-operator
+          if sudo deploy/install-admin-web.sh install --config "$test_dir/web.toml"; then
+            echo 'web installer accepted agent Tailscale management authority' >&2
+            exit 1
+          fi
+          sudo test ! -e /usr/local/libexec/secrets-broker-admin-web
+          sudo rm /run/secrets-broker-test-operator
+          sudoers_before="$(sudo sha256sum /etc/sudoers.d/secrets-broker)"
+          sudo deploy/install-admin-web.sh install --config "$test_dir/web.toml"
+          sudo deploy/install-admin-web.sh check
+          test "$(sudo stat -c '%u:%g:%a' /run/secrets-broker-admin.sock)" = 0:0:600
+          if sudo -u runner curl --silent --max-time 5 --unix-socket /run/secrets-broker-admin.sock http://localhost/; then
+            echo 'agent reached administrator socket' >&2
+            exit 1
+          fi
+          if sudo curl --silent --max-time 5 --unix-socket /run/secrets-broker-admin.sock \
+            --header 'Tailscale-User-Login: operator@example.invalid' \
+            --header 'Host: broker.example.ts.net' http://localhost/; then
+            echo 'arbitrary root peer was accepted as tailscaled' >&2
+            exit 1
+          fi
+          sudo systemctl is-active --quiet secrets-broker-admin-web.service
+          web_pid="$(sudo systemctl show --value --property=MainPID secrets-broker-admin-web.service)"
+          if sudo ss -ltnp | grep -Fq "pid=$web_pid,"; then
+            echo 'administrator process opened a TCP listener' >&2
+            exit 1
+          fi
+          sudo /bin/sh -c 'printf "\\n# preserved web config\\n" >> /etc/secrets-broker-admin/web.toml'
+          config_before="$(sudo sha256sum /etc/secrets-broker-admin/web.toml)"
+          sudo deploy/install-admin-web.sh install --config "$test_dir/web.toml"
+          test "$config_before" = "$(sudo sha256sum /etc/secrets-broker-admin/web.toml)"
+          test "$sudoers_before" = "$(sudo sha256sum /etc/sudoers.d/secrets-broker)"
+          if sudo grep -Ev '^(get operator|serve status --json)$' /run/secrets-broker-test-tailscale.log; then
+            echo 'web installer attempted a Tailscale mutation' >&2
+            exit 1
+          fi
 
       - name: Install and check relay service
         run: |

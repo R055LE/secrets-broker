@@ -3,6 +3,8 @@ package admin
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -96,6 +98,15 @@ func (e *Editor) ListProjects() ([]ProjectSummary, error) {
 		projects[i] = ProjectSummary{Alias: project.Alias, Mode: mode, Behavior: behavior}
 	}
 	return projects, nil
+}
+
+func (e *Editor) Revision() (string, error) {
+	data, _, _, err := e.readPolicy()
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func (e *Editor) GetProject(alias string) (ProjectDetail, error) {

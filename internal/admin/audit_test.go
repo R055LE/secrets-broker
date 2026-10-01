@@ -19,6 +19,40 @@ var (
 	errPolicyUpdate     = errors.New("policy update failed")
 )
 
+func TestMutationJSONLPreservesLoginAttributionOnBothEvents(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "audit.jsonl")
+	logger := NewMutationJSONLLogger(path)
+	login := "operator@example.invalid"
+	id, err := logger.Start(context.Background(), MutationStart{ActorUID: 0, ActorLogin: login, Operation: MutationSetApproval})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Finish(context.Background(), id, MutationFinish{ActorLogin: login, Outcome: MutationChanged}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	for index := range 2 {
+		var record map[string]any
+		if err := decoder.Decode(&record); err != nil {
+			t.Fatal(err)
+		}
+		if record["actor_login"] != login || record["mutation_id"] != id {
+			t.Fatalf("attribution lost: %#v", record)
+		}
+		if index == 0 && record["actor_uid"] != float64(0) {
+			t.Fatal("root UID lost")
+		}
+	}
+}
+
 type fakeMutationEditor struct {
 	changed        bool
 	err            error

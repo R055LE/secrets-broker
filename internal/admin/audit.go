@@ -47,6 +47,7 @@ type ProjectEditor interface {
 
 type MutationStart struct {
 	ActorUID     int
+	ActorLogin   string
 	Project      string
 	Operation    string
 	ApprovalMode string
@@ -56,7 +57,8 @@ type MutationStart struct {
 }
 
 type MutationFinish struct {
-	Outcome string
+	Outcome    string
+	ActorLogin string
 }
 
 type MutationLogger interface {
@@ -271,6 +273,7 @@ type mutationRecord struct {
 	Timestamp    time.Time `json:"timestamp"`
 	Event        string    `json:"event"`
 	ActorUID     *int      `json:"actor_uid,omitempty"`
+	ActorLogin   string    `json:"actor_login,omitempty"`
 	Project      string    `json:"project,omitempty"`
 	Operation    string    `json:"operation,omitempty"`
 	ApprovalMode string    `json:"approval_mode,omitempty"`
@@ -296,6 +299,7 @@ func (l *MutationJSONLLogger) Start(_ context.Context, rec MutationStart) (strin
 		Timestamp:    time.Now().UTC(),
 		Event:        "start",
 		ActorUID:     &actorUID,
+		ActorLogin:   rec.ActorLogin,
 		Project:      rec.Project,
 		Operation:    rec.Operation,
 		ApprovalMode: rec.ApprovalMode,
@@ -322,6 +326,7 @@ func (l *MutationJSONLLogger) Finish(_ context.Context, mutationID string, rec M
 		Timestamp:  time.Now().UTC(),
 		Event:      "finish",
 		Outcome:    rec.Outcome,
+		ActorLogin: rec.ActorLogin,
 	})
 }
 
