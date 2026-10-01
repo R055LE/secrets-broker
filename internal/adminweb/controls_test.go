@@ -293,6 +293,9 @@ func TestBrowserFixture(t *testing.T) {
 	s.access = admin.NewAuditedAccessDiagnostic(checker, s.logger, 0)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set("Tailscale-User-Login", testConfig.Login)
+		r.Header.Set("X-Forwarded-Host", r.Host)
+		r.Header.Set("X-Forwarded-Proto", "https")
+		r.Host = "localhost"
 		s.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), peerKey{}, true)))
 	}))
 	s.cfg.Host = server.Listener.Addr().String()

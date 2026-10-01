@@ -65,7 +65,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	peer, _ := r.Context().Value(peerKey{}).(bool)
 	login := r.Header.Values("Tailscale-User-Login")
-	if !peer || len(login) != 1 || login[0] != s.cfg.Login || r.Host != s.cfg.Host || r.URL.Host != "" {
+	// Serve rewrites the Unix proxy Host; its forwarded headers carry the public HTTPS origin.
+	host := r.Header.Values("X-Forwarded-Host")
+	proto := r.Header.Values("X-Forwarded-Proto")
+	if !peer || len(login) != 1 || login[0] != s.cfg.Login || r.Host != "localhost" || r.URL.Host != "" ||
+		len(host) != 1 || host[0] != s.cfg.Host || len(proto) != 1 || proto[0] != "https" {
 		http.Error(w, "Administrator access denied.", http.StatusForbidden)
 		return
 	}

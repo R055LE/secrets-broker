@@ -13,8 +13,10 @@ import (
 
 func request(method, path, body string) *http.Request {
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
-	r.Host = testConfig.Host
+	r.Host = "localhost"
 	r.Header.Set("Tailscale-User-Login", testConfig.Login)
+	r.Header.Set("X-Forwarded-Host", testConfig.Host)
+	r.Header.Set("X-Forwarded-Proto", "https")
 	r.Header.Set("Origin", "https://"+testConfig.Host)
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	return r.WithContext(context.WithValue(r.Context(), peerKey{}, true))
@@ -24,6 +26,23 @@ func response(s *Server, r *http.Request) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
 	return w
+}
+
+func TestTailscaleUnixProxyRequestIsAuthorized(t *testing.T) {
+	s := NewServer(testConfig)
+	calls := 0
+	s.mux.HandleFunc("/probe", func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusNoContent)
+	})
+	r := request("GET", "/probe", "")
+	r.Host = "localhost"
+	r.Header.Set("X-Forwarded-Host", testConfig.Host)
+	r.Header.Set("X-Forwarded-Proto", "https")
+	w := response(s, r)
+	if w.Code != http.StatusNoContent || calls != 1 {
+		t.Fatalf("Tailscale Unix proxy denied: status %d, calls %d", w.Code, calls)
+	}
 }
 
 func TestAuthorizationPrecedesAllRoutes(t *testing.T) {
@@ -37,6 +56,16 @@ func TestAuthorizationPrecedesAllRoutes(t *testing.T) {
 			func(r *http.Request) *http.Request { r.Header.Set("Tailscale-User-Login", "forged"); return r },
 			func(r *http.Request) *http.Request { r.Header.Add("Tailscale-User-Login", testConfig.Login); return r },
 			func(r *http.Request) *http.Request { r.Host = "other.example.ts.net"; return r },
+			func(r *http.Request) *http.Request { r.Host = testConfig.Host; return r },
+			func(r *http.Request) *http.Request { r.Header.Del("X-Forwarded-Host"); return r },
+			func(r *http.Request) *http.Request {
+				r.Header.Set("X-Forwarded-Host", "other.example.ts.net")
+				return r
+			},
+			func(r *http.Request) *http.Request { r.Header.Add("X-Forwarded-Host", testConfig.Host); return r },
+			func(r *http.Request) *http.Request { r.Header.Del("X-Forwarded-Proto"); return r },
+			func(r *http.Request) *http.Request { r.Header.Set("X-Forwarded-Proto", "http"); return r },
+			func(r *http.Request) *http.Request { r.Header.Add("X-Forwarded-Proto", "https"); return r },
 			func(r *http.Request) *http.Request { r.URL.Host = testConfig.Host; return r },
 		} {
 			w := response(s, change(request(method, "/probe", "")))

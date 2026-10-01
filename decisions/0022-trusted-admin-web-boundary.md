@@ -40,6 +40,10 @@ grants, write secrets, or give the worker or agent a new route to the root-owned
   Serve strips client-supplied identity headers before adding its own; tagged-device traffic has no
   user header. Never treat an arbitrary local connection or a forwarded username as identity.
   The socket mode and peer check protect this header boundary from the agent account.
+- Require backend `Host: localhost`, exactly one `X-Forwarded-Host` matching the configured
+  tailnet hostname, and exactly one `X-Forwarded-Proto: https` from that authenticated peer.
+  [Tailscale 1.102.4's Unix proxy](https://github.com/tailscale/tailscale/blob/v1.102.4/ipn/ipnlocal/serve.go#L908)
+  rewrites Host and replaces those forwarded headers with the original HTTPS request values.
 
 The host administrator revokes web access by removing the tailnet grant or disabling Serve, then
 restarting the web service and socket to close existing connections. Root and host Tailscale
