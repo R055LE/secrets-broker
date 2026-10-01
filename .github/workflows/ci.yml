@@ -88,14 +88,18 @@ jobs:
             for path in \
               bin/secrets-broker \
               bin/secrets-broker-admin \
+              bin/secrets-broker-admin-web \
               bin/secrets-broker-worker \
               bin/secrets-broker-relay \
               deploy/install-worker.sh \
               deploy/install-relay.sh \
+              deploy/install-admin-web.sh \
               deploy/upgrade-release.sh \
               deploy/secrets-broker.logrotate \
               deploy/secrets-broker.sudoers \
               deploy/secrets-broker-relay.service \
+              deploy/secrets-broker-admin-web.socket \
+              deploy/secrets-broker-admin-web.service \
               deploy/secrets-broker-relay.env.example \
               policy.example.toml \
               README.md \
@@ -363,8 +367,9 @@ jobs:
         run: |
           test ! -e /usr/bin/tailscale
           test_dir="$(mktemp -d)"
-          trap 'sudo systemctl stop secrets-broker-admin-web.socket secrets-broker-admin-web.service || true; sudo rm -f /usr/bin/tailscale /run/secrets-broker-test-operator /run/secrets-broker-test-tailscale.log; rm -rf "$test_dir"' EXIT
-          go build -o bin/secrets-broker-admin-web ./cmd/secrets-broker-admin-web
+          trap 'sudo systemctl stop secrets-broker-admin-web.socket secrets-broker-admin-web.service || true; rm -rf "$test_dir"' EXIT
+          tar -xzf dist/secrets-broker-v0.0.0-ci-linux-amd64.tar.gz -C "$test_dir"
+          release_root="$test_dir/secrets-broker-v0.0.0-ci-linux-amd64"
           # shellcheck disable=SC2016 # These parameters belong to the generated mock.
           printf '%s\n' \
             '#!/bin/sh' \
@@ -377,15 +382,15 @@ jobs:
           sudo install -o root -g root -m 0755 "$test_dir/tailscale" /usr/bin/tailscale
           printf '%s\n' "host = 'broker.example.ts.net'" "login = 'operator@example.invalid'" > "$test_dir/web.toml"
           sudo touch /run/secrets-broker-test-operator
-          if sudo deploy/install-admin-web.sh install --config "$test_dir/web.toml"; then
+          if sudo "$release_root/deploy/install-admin-web.sh" install --config "$test_dir/web.toml"; then
             echo 'web installer accepted agent Tailscale management authority' >&2
             exit 1
           fi
           sudo test ! -e /usr/local/libexec/secrets-broker-admin-web
           sudo rm /run/secrets-broker-test-operator
           sudoers_before="$(sudo sha256sum /etc/sudoers.d/secrets-broker)"
-          sudo deploy/install-admin-web.sh install --config "$test_dir/web.toml"
-          sudo deploy/install-admin-web.sh check
+          sudo "$release_root/deploy/install-admin-web.sh" install --config "$test_dir/web.toml"
+          sudo "$release_root/deploy/install-admin-web.sh" check
           test "$(sudo stat -c '%u:%g:%a' /run/secrets-broker-admin.sock)" = 0:0:600
           if sudo -u runner curl --silent --max-time 5 --unix-socket /run/secrets-broker-admin.sock http://localhost/; then
             echo 'agent reached administrator socket' >&2
@@ -405,7 +410,7 @@ jobs:
           fi
           sudo /bin/sh -c 'printf "\\n# preserved web config\\n" >> /etc/secrets-broker-admin/web.toml'
           config_before="$(sudo sha256sum /etc/secrets-broker-admin/web.toml)"
-          sudo deploy/install-admin-web.sh install --config "$test_dir/web.toml"
+          sudo "$release_root/deploy/install-admin-web.sh" install --config "$test_dir/web.toml"
           test "$config_before" = "$(sudo sha256sum /etc/secrets-broker-admin/web.toml)"
           test "$sudoers_before" = "$(sudo sha256sum /etc/sudoers.d/secrets-broker)"
           if sudo grep -Ev '^(get operator|serve status --json)$' /run/secrets-broker-test-tailscale.log; then
@@ -444,7 +449,7 @@ jobs:
         run: |
           test ! -e /usr/local/sbin/gh
           test_dir="$(mktemp -d)"
-          trap 'sudo rm -f /usr/local/sbin/gh; rm -rf "$test_dir"' EXIT
+          trap 'sudo systemctl stop secrets-broker-admin-web.socket secrets-broker-admin-web.service || true; sudo rm -f /usr/local/sbin/gh /usr/bin/tailscale /run/secrets-broker-test-operator /run/secrets-broker-test-tailscale.log; rm -rf "$test_dir"' EXIT
           tar -xzf "dist/secrets-broker-$VERSION-linux-amd64.tar.gz" -C "$test_dir"
           release_root="$test_dir/secrets-broker-$VERSION-linux-amd64"
           sudo install -o root -g root -m 0755 scripts/testdata/fake-gh /usr/local/sbin/gh
@@ -489,6 +494,9 @@ jobs:
 
           policy_before="$(sudo sha256sum /etc/secrets-broker/policy.toml)"
           token_before="$(sudo sha256sum /var/lib/secrets-broker/bws-access-token)"
+          sudo systemctl disable --now secrets-broker-admin-web.socket
+          sudo rm /etc/systemd/system/secrets-broker-admin-web.socket /etc/systemd/system/secrets-broker-admin-web.service /usr/local/libexec/secrets-broker-admin-web
+          sudo systemctl daemon-reload
           FAKE_GH_RELEASE_DIR="$PWD/dist" \
             FAKE_GH_LOG="$test_dir/gh-worker.log" \
             FAKE_GH_VERSION="$VERSION" \
@@ -500,6 +508,45 @@ jobs:
           cmp -s "$release_root/bin/secrets-broker-admin" /usr/local/sbin/secrets-broker-admin
           cmp -s "$release_root/bin/secrets-broker-worker" /usr/local/libexec/secrets-broker-worker
           cmp -s "$release_root/deploy/upgrade-release.sh" /usr/local/bin/secrets-broker-upgrade
+          sudo test ! -e /usr/local/libexec/secrets-broker-admin-web
+          sudo test ! -e /etc/systemd/system/secrets-broker-admin-web.socket
+          sudo test ! -e /run/secrets-broker-admin.sock
+
+          sudo "$release_root/deploy/install-admin-web.sh" install
+          web_config_before="$(sudo sha256sum /etc/secrets-broker-admin/web.toml)"
+          sudo systemctl disable --now secrets-broker-admin-web.socket
+          sudo /bin/sh -c 'printf "%s\n" "#!/bin/sh" "exit 99" > /usr/local/libexec/secrets-broker-admin-web'
+          disabled_web_before="$(sudo sha256sum /usr/local/libexec/secrets-broker-admin-web)"
+          FAKE_GH_RELEASE_DIR="$PWD/dist" \
+            FAKE_GH_LOG="$test_dir/gh-web-disabled.log" \
+            FAKE_GH_VERSION="$VERSION" \
+            /usr/local/bin/secrets-broker-upgrade worker "$VERSION"
+          test "$disabled_web_before" = "$(sudo sha256sum /usr/local/libexec/secrets-broker-admin-web)"
+          test "$(sudo systemctl is-enabled secrets-broker-admin-web.socket || true)" = disabled
+          sudo test ! -e /run/secrets-broker-admin.sock
+
+          sudo "$release_root/deploy/install-admin-web.sh" install
+          cli_before="$(sudo sha256sum /usr/local/bin/secrets-broker)"
+          sudo touch /run/secrets-broker-test-operator
+          if FAKE_GH_RELEASE_DIR="$PWD/dist" \
+            FAKE_GH_LOG="$test_dir/gh-web-denied.log" \
+            FAKE_GH_VERSION="$VERSION" \
+            /usr/local/bin/secrets-broker-upgrade worker "$VERSION"; then
+            echo 'upgrade accepted an unsafe enabled web boundary' >&2
+            exit 1
+          fi
+          sudo rm /run/secrets-broker-test-operator
+          test "$cli_before" = "$(sudo sha256sum /usr/local/bin/secrets-broker)"
+          sudo /bin/sh -c 'printf "%s\n" "#!/bin/sh" "exit 99" > /usr/local/libexec/secrets-broker-admin-web'
+          FAKE_GH_RELEASE_DIR="$PWD/dist" \
+            FAKE_GH_LOG="$test_dir/gh-web-enabled.log" \
+            FAKE_GH_VERSION="$VERSION" \
+            /usr/local/bin/secrets-broker-upgrade worker "$VERSION"
+          sudo cmp -s "$release_root/bin/secrets-broker-admin-web" /usr/local/libexec/secrets-broker-admin-web
+          test "$web_config_before" = "$(sudo sha256sum /etc/secrets-broker-admin/web.toml)"
+          test "$policy_before" = "$(sudo sha256sum /etc/secrets-broker/policy.toml)"
+          test "$token_before" = "$(sudo sha256sum /var/lib/secrets-broker/bws-access-token)"
+          sudo "$release_root/deploy/install-admin-web.sh" check
 
           environment_before="$(sudo sha256sum /etc/secrets-broker-relay/environment)"
           FAKE_GH_RELEASE_DIR="$PWD/dist" \

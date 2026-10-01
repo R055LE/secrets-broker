@@ -50,20 +50,27 @@ for arch in amd64 arm64; do
     -o "$stage_dir/bin/secrets-broker-admin" ./cmd/secrets-broker-admin
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
     -trimpath -buildvcs=false -ldflags="-s -w -buildid=" \
+    -o "$stage_dir/bin/secrets-broker-admin-web" ./cmd/secrets-broker-admin-web
+  CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
+    -trimpath -buildvcs=false -ldflags="-s -w -buildid=" \
     -o "$stage_dir/bin/secrets-broker-relay" ./cmd/secrets-broker-relay
   chmod 0755 "$stage_dir/bin/secrets-broker" \
     "$stage_dir/bin/secrets-broker-admin" \
+    "$stage_dir/bin/secrets-broker-admin-web" \
     "$stage_dir/bin/secrets-broker-worker" \
     "$stage_dir/bin/secrets-broker-relay"
 
   install -m 0755 \
     deploy/install-worker.sh \
     deploy/install-relay.sh \
+    deploy/install-admin-web.sh \
     deploy/upgrade-release.sh \
     "$stage_dir/deploy/"
   install -m 0644 \
     deploy/secrets-broker-relay.env.example \
     deploy/secrets-broker-relay.service \
+    deploy/secrets-broker-admin-web.socket \
+    deploy/secrets-broker-admin-web.service \
     deploy/secrets-broker.logrotate \
     deploy/secrets-broker.sudoers \
     "$stage_dir/deploy/"

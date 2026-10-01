@@ -168,6 +168,10 @@ release verification and role setup above, and the first release carrying the he
 installed that way once to bootstrap later one-command upgrades. GitHub CLI must be current and
 able to reach the release and attestation APIs on both devices.
 
+Worker upgrades also update the administrator web binary and units when its socket is already
+enabled. They preserve its configuration and preflight the private Serve boundary before changing
+worker binaries. An absent or disabled web role stays unchanged.
+
 ### Manage project policy
 
 The worker installer also installs `/usr/local/sbin/secrets-broker-admin`. It is a separate,
@@ -322,13 +326,19 @@ quota.
 
 ### Optional administrator web socket
 
-The first web service slice provides a verified administrator connection page. Project pages and
-editing forms follow separately. From a source checkout, build it with `task build:admin-web` and
-prepare a trusted TOML file containing the exact private hostname and personal Tailscale login:
+The optional web app shows local project policy, worker-visible Bitwarden projects, and explicit
+path and grant checks. Guided creation starts in confirm mode with no commands. Metadata,
+approval mode, and exact argument edits have a review step; metadata changes, automatic mode,
+and added commands require confirmation. Recent checks expire after ten minutes or a policy edit.
+
+Use the verified release bundle from the first-install procedure above. A source checkout can
+also build with `task build:admin-web`. Prepare a trusted TOML file containing the exact private
+hostname and personal Tailscale login. The optional approval link points to the separate relay:
 
 ```toml
 host = "broker.example.ts.net"
 login = "operator@example.invalid"
+approval_url = "http://relay.example.ts.net:7621"
 ```
 
 After approving installation on the broker host:
@@ -345,6 +355,21 @@ Serve and tailnet ACL setup are explicit host operations. Verify the phone ident
 before using the private HTTPS URL. Web operations carry the authenticated login into both admin
 audit records while preserving the root UID. The boundary and live prerequisite are recorded in
 [PR #70](https://github.com/R055LE/secrets-broker/pull/70).
+
+Save the private `https://broker.example.ts.net/` URL on your phone. In Bitwarden Secrets Manager,
+create the project and grant the worker machine account read access once. Refresh the app's
+Bitwarden list, select its name and ID, and enter a local alias, existing token entry identifier,
+and absolute working directory. Review creation, then check the directory and project grant. Add
+one exact argument per field, review the list, and confirm before saving. Quoting and spaces stay
+inside the argument where you typed them; an added blank field represents an empty argument.
+
+The root CLI remains available for these operations and for removal/recovery. Secret entry stays
+in Bitwarden or a trusted terminal until its separate writer boundary is implemented. After an
+approved first deployment, acceptance needs a disposable local alias and worker-visible BWS
+project: exercise discovery, create, both checks, exact argv, approval mode, and metadata edits
+from the phone, then inspect the same policy through the CLI and check audit attribution. Use
+`sudo secrets-broker-admin projects show ALIAS` for the CLI view. Run the boundary probe and agent-denial
+checks from ADR-0022 again if Tailscale authority, forwarding, or socket permissions change.
 
 To revoke browser access, remove its tailnet grant or run `sudo tailscale serve reset`, then restart
 `secrets-broker-admin-web.socket` and `secrets-broker-admin-web.service` to close existing connections.
