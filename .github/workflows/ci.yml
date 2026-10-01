@@ -418,6 +418,7 @@ jobs:
           sudo apt-get install --no-install-recommends -y strace >/dev/null
           sudo install -d -m 0755 /etc/systemd/system/secrets-broker-admin-web.service.d
           printf '%s\n' '[Service]' \
+            'ExecStartPost=/usr/bin/grep -E "^(Uid|Gid|Cap(Inh|Prm|Eff|Bnd)|NoNewPrivs|Seccomp):" /proc/self/status' \
             'ExecStartPost=/usr/bin/strace -f -e trace=execve,prctl,capset,setuid,setreuid,setresuid,setfsuid,setgid,setregid,setresgid,setfsgid,setgroups /usr/sbin/runuser -u secrets-broker -- /usr/local/libexec/secrets-broker-worker projects-list' \
             > "$test_dir/worker-probe.conf"
           sudo install -o root -g root -m 0644 "$test_dir/worker-probe.conf" \
@@ -425,6 +426,7 @@ jobs:
           sudo systemctl daemon-reload
           if ! sudo systemctl restart secrets-broker-admin-web.service; then
             sudo journalctl --unit secrets-broker-admin-web.service --no-pager -n 80
+            sudo journalctl --kernel --no-pager -g 'runuser|setuid' -n 15
             exit 1
           fi
           sudo journalctl --unit secrets-broker-admin-web.service --no-pager -n 80
