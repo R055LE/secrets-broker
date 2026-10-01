@@ -5,29 +5,35 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"html/template"
 	"mime"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/R055LE/secrets-broker/internal/admin"
+	"github.com/R055LE/secrets-broker/internal/execx"
+	"github.com/R055LE/secrets-broker/internal/projectlist"
 )
 
 type peerKey struct{}
 
 type formToken struct {
-	action, login, revision string
-	expires                 time.Time
+	action, login, revision, target string
+	expires                         time.Time
 }
 
 type Server struct {
-	cfg      Config
-	mux      *http.ServeMux
-	mu       sync.Mutex
-	tokens   map[string]formToken
-	now      func() time.Time
-	revision func() (string, error)
+	cfg            Config
+	mux            *http.ServeMux
+	mu             sync.Mutex
+	tokens         map[string]formToken
+	now            func() time.Time
+	revision       func() (string, error)
+	reader         projectReader
+	logger         admin.MutationLogger
+	access         admin.AccessDiagnostic
+	available      []projectlist.Project
+	availableUntil time.Time
 }
 
 func NewServer(cfg Config) *Server {
@@ -35,7 +41,10 @@ func NewServer(cfg Config) *Server {
 		cfg: cfg, mux: http.NewServeMux(), tokens: make(map[string]formToken),
 		now: time.Now, revision: policyRevision,
 	}
-	s.mux.HandleFunc("GET /{$}", s.home)
+	s.reader = admin.NewEditor(PolicyPath, 0)
+	s.logger = actorLogger{logger: admin.NewMutationJSONLLogger("/var/log/secrets-broker-admin/audit.jsonl"), login: cfg.Login}
+	s.access = admin.NewAuditedAccessDiagnostic(admin.NewWorkerAccessChecker(execx.OSRunner{}), s.logger, 0)
+	s.registerPages()
 	return s
 }
 
@@ -58,16 +67,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-var homeTemplate = template.Must(template.New("home").Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Secrets Broker</title></head>
-<body><h1>Secrets Broker</h1><p>Administrator connection ready.</p><p>Signed in as {{.}}</p></body></html>`))
-
-func (s *Server) home(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = homeTemplate.Execute(w, s.cfg.Login)
+func (s *Server) issueToken(action, revision string) (string, error) {
+	return s.issueTargetToken(action, revision, "")
 }
 
-func (s *Server) issueToken(action, revision string) (string, error) {
+func (s *Server) issueTargetToken(action, revision, target string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneTokens()
@@ -79,7 +83,7 @@ func (s *Server) issueToken(action, revision string) (string, error) {
 		return "", err
 	}
 	token := hex.EncodeToString(random[:])
-	s.tokens[token] = formToken{action: action, login: s.cfg.Login, revision: revision, expires: s.now().Add(10 * time.Minute)}
+	s.tokens[token] = formToken{action: action, login: s.cfg.Login, revision: revision, target: target, expires: s.now().Add(10 * time.Minute)}
 	return token, nil
 }
 
@@ -128,6 +132,10 @@ func (s *Server) protectPost(action string, next http.HandlerFunc) http.HandlerF
 		entry, ok := s.takeToken(r.PostForm.Get("csrf"), action)
 		if !ok {
 			http.Error(w, "Form expired or already submitted. Reload the page.", http.StatusForbidden)
+			return
+		}
+		if entry.target != "" && (len(r.PostForm["alias"]) != 1 || r.PostForm.Get("alias") != entry.target) {
+			http.Error(w, "Form target changed. Reload the page.", http.StatusForbidden)
 			return
 		}
 		if entry.revision != "" {

@@ -50,6 +50,20 @@ func TestServeConfigurationAllowsOnlyPrivateFixedProxy(t *testing.T) {
 	}
 }
 
+func TestApprovalLinkIsPrivateAndSeparate(t *testing.T) {
+	base := "host = 'broker.example.ts.net'\nlogin = 'operator@example.invalid'\napproval_url = '"
+	for _, link := range []string{"http://relay.example.ts.net:7621", "http://relay.example.ts.net:7621/"} {
+		if cfg, err := ParseConfig([]byte(base + link + "'")); err != nil || cfg.ApprovalURL != link {
+			t.Fatalf("valid relay link: %#v %v", cfg, err)
+		}
+	}
+	for _, link := range []string{"https://relay.example.ts.net:7621", "http://localhost:7621", "http://relay.example.ts.net:7620", "http://user@relay.example.ts.net:7621", "http://relay.example.ts.net:7621/decide", "http://relay.example.ts.net:7621/?id=x", "http://relay.example.ts.net:7621/#x"} {
+		if _, err := ParseConfig([]byte(base + link + "'")); err == nil {
+			t.Fatalf("accepted relay link %q", link)
+		}
+	}
+}
+
 type tailscaleRunner struct {
 	execx.FakeRunner
 	operator, status string
