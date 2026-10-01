@@ -1,8 +1,8 @@
 # ADR-0022: Serve project administration through a protected Unix socket
 
-**Status:** Proposed; live Tailscale Serve identity check required before implementation
+**Status:** Proposed; live Tailscale Serve identity check passed
 **Date:** 2026-09-27
-**Revised:** 2026-09-30
+**Revised:** 2026-10-01
 **Deciders:** Ross
 
 ## Context
@@ -97,22 +97,27 @@ less-privileged local accounts and cross-origin browser requests, not those host
 
 ## Verification before implementation
 
-The installed Tailscale 1.102.4 CLI accepts `unix:` Serve targets. Tailscale documents that Serve
-adds user identity headers, strips client-supplied copies, and omits them for tagged-device traffic.
-Barnabas currently reports no local Tailscale operator, while the host documentation still describes
-an older `--operator=ross` setup. The live boundary has not been proven. Do not implement the
-editable service until these checks pass with a temporary root-only Unix listener:
+The live probe passed on Barnabas on 2026-10-01 with Tailscale 1.102.4 and the reviewed
+`scripts/admin-identity-probe.py` listener. The operator ran the pinned script as root and routed
+private Serve HTTPS to its Unix socket. Home-network PR #23 had applied the personal-device port
+443 grant and corrected the stale operator setup documentation.
 
-The reviewed `scripts/admin-identity-probe.py` is the one-time listener for this check. Run a pinned
-git object as root, then remove the temporary Serve route and stop the listener. Do not install it.
+- The operator's phone reported peer UID `0` and exactly one expected personal login. Sending
+  `Tailscale-User-Login: forged@example.invalid` from the phone produced the same personal login.
+- Host `stat` reported socket mode `600`, UID `0`, and GID `0`. A direct Unix-socket `curl` from
+  agent UID `1000` failed to connect (exit `7`).
+- Normal same-host HTTPS and a request forging the personal login from tagged Barnabas both
+  returned `{"peer_uid": 0, "login_headers": []}`. Neither acquired the phone's identity.
+- Repeating the identical active `tailscale serve --bg unix:/run/secrets-broker-identity-probe.sock`
+  command as agent UID `1000` failed with `Access denied: serve config denied` (exit `1`). The
+  Serve configuration stayed unchanged and `tailscale get operator` remained empty.
+- Serve status identified the route as tailnet-only. Its JSON configuration had HTTPS on `443`
+  and the single Unix proxy, with no `AllowFunnel` entry. The socket listener and script used no
+  application TCP listener; HTTPS listened only on the host's Tailscale addresses.
 
-1. Confirm the agent account cannot change Serve configuration or reach the Unix listener. Confirm
-   the intended personal phone reaches the listener through private HTTPS Serve, and record the
-   listener's peer UID and exact Tailscale login header.
-2. Send a forged identity header from the phone and confirm Serve replaces it. Test same-host
-   access from the agent account and a tagged device; neither may acquire the personal identity.
-3. Confirm Funnel is disabled, the tailnet ACL grants only the intended private port, and the
-   listener has no TCP endpoint. If any check fails, revise this ADR before implementation.
+This passes the prerequisite for service implementation. Remove the temporary Serve route and
+stop the listener after checking; the probe is never installed as a production service. Future
+deployment acceptance repeats phone identity, forged-header replacement, and agent-denial checks.
 
 ## Acceptance contract
 
