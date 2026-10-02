@@ -99,8 +99,9 @@ func TestListProjectsUsesWorkerTokenAndReturnsOnlyNamesAndIDs(t *testing.T) {
 	runner := &accessRunner{responses: []accessResponse{{
 		exitCode: 0,
 		stdout: `[{
-			"object":"project", "id":"project-id", "name":"Example",
-			"organizationId":"organization-id", "futureSensitiveField":"sentinel-secret"
+			"id":"project-id", "name":"Example", "organizationId":"organization-id",
+			"creationDate":"2026-01-01T00:00:00Z", "revisionDate":"2026-01-01T00:00:00Z",
+			"futureSensitiveField":"sentinel-secret"
 		}]`,
 	}}}
 	resolver := &recordingResolver{token: token.New("test-token")}

@@ -31,7 +31,8 @@ func TestRunProjectsListEmitsOnlyNamesAndIDs(t *testing.T) {
 	server := accessCheckServer(t, &execx.FakeRunner{
 		PassthroughExitCode: 0,
 		PassthroughStdout: `[{
-			"object":"project", "id":"project-id", "name":"Example",
+			"id":"project-id", "name":"Example", "organizationId":"organization-id",
+			"creationDate":"2026-01-01T00:00:00Z", "revisionDate":"2026-01-01T00:00:00Z",
 			"futureSensitiveField":"sentinel-secret"
 		}]`,
 	})
